@@ -113,6 +113,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     },
     Create,
     CreateModel,
+    createModelReportsReadiness: true,
     provider: {
       snapshot: setup.snapshot,
       subscribe: setup.subscribe,

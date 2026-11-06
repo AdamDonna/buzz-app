@@ -656,3 +656,32 @@ it("lists Pi's conversations in the Activity tab, and shows a transcript", async
   );
   expect(screen.getByText("Hello from other")).toBeVisible();
 });
+
+it.each([
+  [{}, false],
+  [{ provider: "anthropic" }, false],
+  [{ model: "claude-x" }, false],
+  [{ provider: "anthropic", model: "claude-x" }, true],
+] as const)(
+  "reports Pi connection readiness from resolved defaults %j",
+  async (defaults, expected) => {
+    const pi = fakePi({}, defaults);
+    const setup = new PiSetup(pi);
+    const { CreateModel } = createTabs({ setup, runtime: fakeRuntime() });
+    const onReadyChange = vi.fn();
+    render(
+      <CreateModel
+        config={DEFAULT_CONFIG}
+        onChange={vi.fn()}
+        onReadyChange={onReadyChange}
+        disabled={false}
+      />,
+    );
+    await act(async () => {
+      await setup.providers();
+    });
+    await waitFor(() =>
+      expect(onReadyChange).toHaveBeenLastCalledWith(expected),
+    );
+  },
+);

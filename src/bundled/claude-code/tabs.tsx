@@ -413,6 +413,7 @@ export function createTabs({
   function CreateModel({
     config,
     onChange,
+    onReadyChange,
     ...props
   }: AgentCreateProps<Config>) {
     const current = readConfig(config);
@@ -421,6 +422,16 @@ export function createTabs({
       defaults.subscribe,
       defaults.snapshot,
     );
+    const ready =
+      state.status?.state === "ready" &&
+      !state.running &&
+      !state.modelsChecking &&
+      !state.modelsError &&
+      !!providerDefaultModel(
+        current.model || providerDefaults.model,
+        state.models,
+      )?.trim();
+    useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
     if (!state.status)
       return (
         <span role="status" className="text-body-sm text-secondary">

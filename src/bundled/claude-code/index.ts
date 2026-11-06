@@ -128,6 +128,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     defaults: () => ({ config: DEFAULT_CONFIG }),
     Create,
     CreateModel,
+    createModelReportsReadiness: true,
     CreateThinking,
     importShared: (source) =>
       source.runtime === "claude" &&

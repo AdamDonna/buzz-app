@@ -321,6 +321,8 @@ export type AgentCreateProps<Config = unknown> = {
   openSettings?: () => void;
   /** Model fields may use the compact card treatment in the library. */
   modelAppearance?: "glass-ghost" | "inverted";
+  /** Reports whether the displayed provider/model selection is usable, including defaults. */
+  onReadyChange?: (ready: boolean) => void;
   /** Hide effort editing in streamlined connection setup. */
   showEffort?: boolean;
   config: Config;
@@ -816,6 +818,9 @@ export type AgentType<Config = unknown> = {
   }>;
   /** Compact model field for creation and library cards; the type owns discovery and configuration. */
   CreateModel?: ComponentType<AgentCreateProps<Config>>;
+  /** CreateModel reports onReadyChange; opt in to inline connection setup.
+   * Omit for older controls: users must choose another harness for that flow. */
+  createModelReportsReadiness?: boolean;
   /** Compact Thinking control for creation; the type owns its values and default representation. */
   CreateThinking?: ComponentType<AgentCreateProps<Config>>;
   /** Device-wide readiness and management. Agents supplies the menu row,

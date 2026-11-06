@@ -544,6 +544,7 @@ export function createTabs({
   function CreateModel({
     config,
     onChange,
+    onReadyChange,
     disabled,
     modelAppearance,
   }: AgentCreateProps<Config>) {
@@ -564,6 +565,12 @@ export function createTabs({
     );
     const unknown = unknownProvider(current, providers);
     const fallback = defaultModel(current, providers?.defaults);
+    const ready =
+      listing.status === "ready" &&
+      !unknown &&
+      !!id.trim() &&
+      !!(current.model || fallback)?.trim();
+    useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
     const named = (model: string) =>
       models.value?.find((item) => item.id === model)?.label ?? model;
     const provider =

@@ -563,6 +563,7 @@ export function createTabs(
     openSettings,
     config,
     onChange,
+    onReadyChange,
     ...props
   }: AgentCreateProps<Config>) {
     const current = readConfig(config);
@@ -590,6 +591,12 @@ export function createTabs(
         : status?.state === "signed-out" || error === SIGN_IN_ERROR
           ? "login"
           : undefined;
+    const ready =
+      !step &&
+      !checking &&
+      !error &&
+      !!catalogModel(current.model || providerDefaults.model, data);
+    useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
     const field = useRef<HTMLDivElement>(null);
     const hadStep = useRef(false);
     const handoff = useRef(false);
@@ -645,6 +652,16 @@ export function createTabs(
             onChange(readConfig({ ...current, ...modelChange(model, data) }))
           }
         />
+        {onReadyChange &&
+          !checking &&
+          !error &&
+          data &&
+          current.model &&
+          !catalogModel(current.model, data) && (
+            <p role="status" className="m-0 text-body-sm text-subtle">
+              This model isn’t available. Choose another model to continue.
+            </p>
+          )}
       </div>
     );
   }

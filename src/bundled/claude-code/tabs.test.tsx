@@ -2208,3 +2208,19 @@ it("refreshes mounted Claude Settings after an execution binding changes", async
   expect(screen.getByLabelText("Workspace")).toBeDisabled();
   expect(f.execution).not.toHaveBeenCalled();
 });
+
+it("reports Claude connection readiness after resolving the provider default", async () => {
+  const Model = installed().type.CreateModel;
+  if (!Model) throw new Error("Missing model control");
+  const onReadyChange = vi.fn();
+  render(
+    <Model
+      config={DEFAULT_CONFIG}
+      onChange={vi.fn()}
+      onReadyChange={onReadyChange}
+      disabled={false}
+    />,
+  );
+  expect(onReadyChange).toHaveBeenCalledWith(false);
+  await waitFor(() => expect(onReadyChange).toHaveBeenLastCalledWith(true));
+});

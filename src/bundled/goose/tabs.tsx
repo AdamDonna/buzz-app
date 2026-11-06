@@ -1174,6 +1174,7 @@ export function createTabs({
   function CreateModel({
     config,
     onChange,
+    onReadyChange,
     disabled,
     modelAppearance,
     showEffort = true,
@@ -1196,6 +1197,11 @@ export function createTabs({
             ?.defaultModel
         : listing.value?.defaults.model) || "";
     const selectedModel = current.model || fallback;
+    const ready =
+      listing.status === "ready" &&
+      !!listing.value.providers.find((item) => item.id === provider) &&
+      !!selectedModel.trim();
+    useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
     const [thinking] = useRead(
       () =>
         provider && selectedModel

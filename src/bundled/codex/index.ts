@@ -163,6 +163,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     defaults: () => ({ config: { ...defaults } }),
     Create,
     CreateModel,
+    createModelReportsReadiness: true,
     CreateThinking,
     importShared: (source) =>
       source.runtime === "codex" &&

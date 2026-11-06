@@ -2615,3 +2615,35 @@ it("keeps a later Activity read when an earlier closed tab finishes last", async
   expect(f.runtime.conversations(agent)).toEqual([]);
   expect(f.spawn).not.toHaveBeenCalled();
 });
+
+it("reports Codex connection readiness only after resolving a model", async () => {
+  const f = fixture();
+  const onReadyChange = vi.fn();
+  const { rerender } = render(
+    <f.tabs.CreateModel
+      config={{ ...defaults, model: "missing-model" }}
+      onChange={vi.fn()}
+      onReadyChange={onReadyChange}
+      disabled={false}
+    />,
+  );
+  await act(async () => {
+    await f.provider.check();
+  });
+  expect(onReadyChange).toHaveBeenLastCalledWith(false);
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "This model isn’t available. Choose another model to continue.",
+  );
+  rerender(
+    <f.tabs.CreateModel
+      config={defaults}
+      onChange={vi.fn()}
+      onReadyChange={onReadyChange}
+      disabled={false}
+    />,
+  );
+  await waitFor(() => expect(onReadyChange).toHaveBeenLastCalledWith(true));
+  expect(
+    screen.queryByText(/This model isn’t available/),
+  ).not.toBeInTheDocument();
+});

@@ -99,6 +99,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     defaults: () => ({ config: DEFAULT_CONFIG }),
     Create,
     CreateModel,
+    createModelReportsReadiness: true,
     importShared: (source) =>
       source.runtime === "pi"
         ? {
