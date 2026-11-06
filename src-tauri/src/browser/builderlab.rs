@@ -50,6 +50,32 @@ impl TryFrom<RawViewerAuth> for ViewerAuth {
     }
 }
 
+impl ViewerAuth {
+    fn federated_revision(&self) -> Option<&str> {
+        match self {
+            Self::Federated(revision) => Some(revision),
+            #[cfg(debug_assertions)]
+            Self::Broker(_) => None,
+        }
+    }
+}
+
+/// A 401 alone never ends the shared FI session. As for other granted calls,
+/// ask the adapter's session route once; it retires the session only when it
+/// has really ended, so Settings shows it expired.
+async fn recheck_refused_session(
+    status: reqwest::StatusCode,
+    revision: Option<String>,
+    fi: FederatedIdentity,
+) {
+    if status != reqwest::StatusCode::UNAUTHORIZED {
+        return;
+    }
+    if let Some(revision) = revision {
+        fi.recheck(&revision).await;
+    }
+}
+
 pub(super) struct Bootstrap {
     #[cfg(target_os = "macos")]
     pub cookie: Zeroizing<String>,
@@ -190,6 +216,7 @@ pub(super) async fn prepare(
     #[cfg(debug_assertions)]
     let development = matches!(auth, ViewerAuth::Broker(_));
     let federated = !development;
+    let revision = auth.federated_revision().map(str::to_owned);
     let (url, header, credential) = exchange_request(auth, fi)?;
     let client = reqwest::Client::builder()
         .https_only(!development)
@@ -215,6 +242,12 @@ pub(super) async fn prepare(
         .send()
         .await
         .map_err(|_| "Builderlab sign-in request failed")?;
+    // The refusal shows now; the session route answers in the background.
+    tokio::spawn(recheck_refused_session(
+        response.status(),
+        revision.clone(),
+        fi.clone(),
+    ));
     if !exchange_available(response.status(), federated)? {
         return Ok(None);
     }
@@ -467,5 +500,75 @@ mod tests {
             expired(false),
             "Builderlab sign-in expired. Sign in again in Settings"
         );
+    }
+
+    /// The adapter's session route answers every request with `status`.
+    async fn adapter(status: u16) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut head = Vec::new();
+                while !head.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).await.unwrap();
+                    head.push(byte[0]);
+                }
+                let line = String::from_utf8(head).unwrap();
+                log.lock()
+                    .unwrap()
+                    .push(line.lines().next().unwrap().to_owned());
+                let body = if status == 200 {
+                    r#"{"expires_at":"2099-01-01T00:00:00Z"}"#
+                } else {
+                    r#"{"error":"session_expired"}"#
+                };
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        (origin, seen)
+    }
+    fn status(fi: &FederatedIdentity) -> serde_json::Value {
+        serde_json::to_value(fi.snapshot()).unwrap()["status"].clone()
+    }
+
+    #[tokio::test]
+    async fn an_exchange_401_ends_the_session_only_when_the_adapter_denies_it() {
+        let unauthorized = reqwest::StatusCode::UNAUTHORIZED;
+        for (adapter_status, expected) in [(200, "signed-in"), (401, "reauthentication-required")] {
+            let (origin, seen) = adapter(adapter_status).await;
+            let fi = crate::federated_identity::testing::signed_in_at(origin);
+            let current = revision(&fi);
+            recheck_refused_session(unauthorized, Some(current), fi.clone()).await;
+            assert_eq!(status(&fi), expected);
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 1);
+            assert!(seen[0].starts_with("GET /v1/session "), "{}", seen[0]);
+        }
+    }
+
+    #[tokio::test]
+    async fn other_exchange_refusals_and_other_sessions_ask_nothing() {
+        let (origin, seen) = adapter(401).await;
+        let fi = crate::federated_identity::testing::signed_in_at(origin);
+        let current = revision(&fi);
+        for code in [200, 400, 403, 404, 429, 500, 503] {
+            let refusal = reqwest::StatusCode::from_u16(code).unwrap();
+            recheck_refused_session(refusal, Some(current.clone()), fi.clone()).await;
+        }
+        // A development broker has no shared session, and a replaced one is not asked about.
+        let unauthorized = reqwest::StatusCode::UNAUTHORIZED;
+        recheck_refused_session(unauthorized, None, fi.clone()).await;
+        recheck_refused_session(unauthorized, Some("stale".into()), fi.clone()).await;
+        assert!(seen.lock().unwrap().is_empty());
+        assert_eq!(status(&fi), "signed-in");
     }
 }
