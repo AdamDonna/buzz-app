@@ -1805,6 +1805,8 @@ async function mountUploadComposer(
     members?: readonly string[];
     defaultMention?: MessageComposerProps["defaultMention"];
     requireMention?: boolean;
+    /** The channel is a generated huddle room, as a legacy room's metadata shows. */
+    huddle?: boolean;
   } = {},
 ) {
   vi.stubGlobal(
@@ -1863,7 +1865,17 @@ async function mountUploadComposer(
                   ),
                 ]
               : filter.kinds?.includes(39000)
-                ? [metadata(relay, "channel", "General", 1700000000)]
+                ? [
+                    options.huddle
+                      ? metadata(
+                          relay,
+                          "channel",
+                          "huddle-channel",
+                          1700000000,
+                          [["private"], ["t", "stream"], ["ttl", "3600"]],
+                        )
+                      : metadata(relay, "channel", "General", 1700000000),
+                  ]
                 : [],
         );
       },
@@ -1989,8 +2001,45 @@ it("leaves focus alone on picker cancellation or rejected files", async () => {
   expect(
     await screen.findByText("Could not attach file", { exact: true }),
   ).toBeVisible();
+  expect(screen.getByText("empty.txt is empty.")).toBeVisible();
   expect(h.uploadCalls).toHaveLength(0);
   expect(trigger).toHaveFocus();
+});
+
+it("attaches the picked files that fit and names an empty one", async () => {
+  const h = await mountUploadComposer();
+  const names = ["one.txt", "two.txt", "three.txt", "four.txt"];
+  pickAttachments(h.container, [
+    ...names.slice(0, 2).map((name) => attachmentFile(name)),
+    attachmentFile("cloud-placeholder.png", ""),
+    ...names.slice(2).map((name) => attachmentFile(name)),
+  ]);
+  // The title counts what was left out, so it reads true beside the rest.
+  const notice = await screen.findByRole("dialog", {
+    name: "Could not attach 1 of 5 files",
+  });
+  expect(notice).toHaveAccessibleDescription("cloud-placeholder.png is empty.");
+  for (const name of names)
+    expect(
+      screen.getByRole("button", { name: `Remove ${name}` }),
+    ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "Remove cloud-placeholder.png" }),
+  ).toBeNull();
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+});
+
+it("counts every picked file when none of several can be attached", async () => {
+  const h = await mountUploadComposer();
+  pickAttachments(h.container, [
+    attachmentFile("a.png", ""),
+    attachmentFile("b.png", ""),
+  ]);
+  const notice = await screen.findByRole("dialog", {
+    name: "Could not attach 2 files",
+  });
+  expect(notice).toHaveAccessibleDescription("a.png, b.png are empty.");
+  expect(h.uploadCalls).toHaveLength(0);
 });
 
 it("does not focus after a picker upload fails or is later retried", async () => {
@@ -2121,11 +2170,13 @@ it("starts picker, paste and drop uploads eagerly and publishes only after Send"
   await waitFor(() =>
     expect(within(h.form()).queryAllByText(/\.txt$/)).toHaveLength(0),
   );
-  expect(screen.getByText("Uploading", { exact: true })).toHaveAttribute(
+  expect(screen.getByText("Uploading to #General")).toHaveAttribute(
     "role",
     "status",
   );
-  const bar = screen.getByRole("progressbar", { name: "Uploading" });
+  const bar = screen.getByRole("progressbar", {
+    name: "Uploading to #General",
+  });
   expect(h.input()).toBeEnabled();
   await act(async () => {
     h.uploadCalls[0]?.result.resolve(uploadDescriptor("picker.txt"));
@@ -2190,8 +2241,8 @@ it.each([false, true])(
       ).toEqual([`metadata.txt: ${UPLOAD_FAILURES.metadata}`]),
     );
     expect(
-      screen.getByText(`Upload failed: ${UPLOAD_FAILURES.metadata}`),
-    ).toBeVisible();
+      screen.getByRole("dialog", { name: "Upload to #General failed" }),
+    ).toHaveAccessibleDescription(UPLOAD_FAILURES.metadata);
     expect(h.input()).toHaveValue(tagged ? "@Honey caption" : "caption");
     expect(h.publish).not.toHaveBeenCalled();
 
@@ -2381,6 +2432,9 @@ it.each(["cleanup", "restore"] as const)(
         await screen.findByRole("button", {
           name: "Retry failed send recovery",
         });
+        expect(
+          screen.getByText(/^Could not restore the failed send to #General\./),
+        ).toBeVisible();
         expect(h.input()).toHaveValue("");
         failWrites = false;
         await userEvent.click(
@@ -2492,7 +2546,9 @@ it("does not overwrite a later local edit when a background upload fails", async
     text: "later work",
   });
   expect(
-    await screen.findByText(/Failed send was kept because this draft changed/),
+    await screen.findByText(
+      /^Failed send to #General was kept because its draft changed\./,
+    ),
   ).toBeVisible();
   const retry = await screen.findByRole("button", {
     name: "Retry failed send recovery",
@@ -2914,7 +2970,9 @@ it("retains successful attachment uploads after a later file fails and retries o
   expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
     "retry.txt: relay down",
   ]);
-  expect(screen.getByText("Upload failed: relay down")).toBeVisible();
+  expect(
+    screen.getByRole("dialog", { name: "Upload to #General failed" }),
+  ).toHaveAccessibleDescription("relay down");
   expect(h.input()).toHaveValue("caption");
   expect(h.publish).not.toHaveBeenCalled();
 
@@ -2963,6 +3021,61 @@ it("finishes a background send in its original channel after the composer unmoun
   expect(h.sign).toHaveBeenCalledTimes(1);
 });
 
+it("names a failed background send's channel in another conversation and opens it", async () => {
+  const h = await mountUploadComposer();
+  await h.otherMembership(true);
+  attachByPaste(h.input(), attachmentFile("mockup.txt"));
+  await userEvent.type(h.input(), "caption");
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  const onOpenLink = vi.fn(() => true);
+  const random = (
+    <MessageComposer
+      session={h.owner.session}
+      scope={h.scope}
+      channelId="other"
+      channelName="Random"
+      onOpenLink={onOpenLink}
+    />
+  );
+  h.rerender(random);
+  expect(screen.getByText("Uploading to #General")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  expect(
+    screen.getByRole("button", { name: "Cancel upload to #General" }),
+  ).toBeVisible();
+
+  // A failure while no composer is mounted waits for the next one, named.
+  h.rerender(null);
+  await act(async () =>
+    h.uploadCalls[0]?.result.reject(new Error("relay down")),
+  );
+  h.rerender(random);
+  const notice = await screen.findByRole("dialog", {
+    name: "Upload to #General failed",
+  });
+  expect(notice).toHaveAccessibleDescription("relay down");
+  fireEvent.click(
+    within(notice).getByRole("button", { name: "Open #General" }),
+  );
+  expect(onOpenLink).toHaveBeenCalledWith("buzz://channel/channel");
+  await waitFor(() => expect(notice).not.toBeInTheDocument());
+
+  h.rerender(
+    <MessageComposer
+      session={h.owner.session}
+      scope={h.scope}
+      channelId="channel"
+      channelName="General"
+    />,
+  );
+  await waitFor(() => expect(h.input()).toHaveValue("caption"));
+  expect(within(h.form()).getByText("mockup.txt")).toBeVisible();
+  expect(h.publish).not.toHaveBeenCalled();
+});
+
 it("keeps a background send on its original thread when the composer moves", async () => {
   const root = "b".repeat(64);
   const h = await mountUploadComposer({ threadRootId: root });
@@ -2987,6 +3100,142 @@ it("keeps a background send on its original thread when the composer moves", asy
   const tags = h.publish.mock.calls[0]?.[0].tags ?? [];
   expect(tags).toContainEqual(["e", root, "", "reply"]);
   expect(tags.flat()).not.toContain("c".repeat(64));
+});
+
+it("names a failed background reply's thread and opens that thread", async () => {
+  const root = "b".repeat(64);
+  const h = await mountUploadComposer({ threadRootId: root });
+  attachByPaste(h.input(), attachmentFile());
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  const onOpenLink = vi.fn(() => true);
+  h.rerender(
+    <MessageComposer
+      session={h.owner.session}
+      scope={h.scope}
+      channelId="channel"
+      channelName="General"
+      onOpenLink={onOpenLink}
+    />,
+  );
+  expect(screen.getByText("Uploading to thread in #General")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  await act(async () =>
+    h.uploadCalls[0]?.result.reject(new Error("relay down")),
+  );
+  const notice = await screen.findByRole("dialog", {
+    name: "Upload to thread in #General failed",
+  });
+  fireEvent.click(
+    within(notice).getByRole("button", { name: "Open thread in #General" }),
+  );
+  expect(onOpenLink).toHaveBeenCalledWith(
+    `buzz://message?channel=channel&id=${root}&thread=${root}`,
+  );
+});
+
+it.each([
+  ["channel", undefined],
+  ["thread", "b".repeat(64)],
+])(
+  "offers no Open for a failed send to the %s its composer shows",
+  async (_case, threadRootId) => {
+    const h = await mountUploadComposer(threadRootId ? { threadRootId } : {});
+    attachByPaste(h.input(), attachmentFile());
+    await waitFor(() => expect(h.send()).toBeEnabled());
+    fireEvent.click(h.send());
+    await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+    h.rerender(
+      <MessageComposer
+        session={h.owner.session}
+        scope={h.scope}
+        channelId="channel"
+        channelName="General"
+        {...(threadRootId ? { threadRootId } : {})}
+        onOpenLink={() => true}
+      />,
+    );
+    await act(async () =>
+      h.uploadCalls[0]?.result.reject(new Error("relay down")),
+    );
+    const notice = await screen.findByRole("dialog", {
+      name: `Upload to ${threadRootId ? "thread in " : ""}#General failed`,
+    });
+    // The restored chip is already in view; dismissing is all that is left.
+    await waitFor(() =>
+      expect(within(h.form()).getByText("notes.txt")).toBeVisible(),
+    );
+    expect(within(notice).queryByRole("button", { name: /^Open/ })).toBeNull();
+    expect(
+      within(notice).getByRole("button", { name: "Dismiss notification" }),
+    ).toBeVisible();
+  },
+);
+
+it("offers Open for a failed send to the conversation its covered tab hides", async () => {
+  const h = await mountUploadComposer();
+  attachByPaste(h.input(), attachmentFile());
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  const onOpenLink = vi.fn(() => true);
+  // A retained tab keeps its composer mounted while another tab covers it.
+  h.rerender(
+    <MessageComposer
+      session={h.owner.session}
+      scope={h.scope}
+      channelId="channel"
+      channelName="General"
+      shown={false}
+      onOpenLink={onOpenLink}
+    />,
+  );
+  await act(async () =>
+    h.uploadCalls[0]?.result.reject(new Error("relay down")),
+  );
+  const notice = await screen.findByRole("dialog", {
+    name: "Upload to #General failed",
+  });
+  fireEvent.click(
+    within(notice).getByRole("button", { name: "Open #General" }),
+  );
+  expect(onOpenLink).toHaveBeenCalledWith("buzz://channel/channel");
+  await waitFor(() => expect(notice).not.toBeInTheDocument());
+});
+
+it("offers no Open for a failed send to a huddle, which opens only from its entry point", async () => {
+  const h = await mountUploadComposer({ huddle: true });
+  await h.otherMembership(true);
+  attachByPaste(h.input(), attachmentFile());
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  const onOpenLink = vi.fn(() => true);
+  h.rerender(
+    <MessageComposer
+      session={h.owner.session}
+      scope={h.scope}
+      channelId="other"
+      channelName="Random"
+      onOpenLink={onOpenLink}
+    />,
+  );
+  // A private room's name has no hash.
+  expect(screen.getByText("Uploading to General")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  await act(async () =>
+    h.uploadCalls[0]?.result.reject(new Error("relay down")),
+  );
+  const notice = await screen.findByRole("dialog", {
+    name: "Upload to General failed",
+  });
+  expect(within(notice).queryByRole("button", { name: /^Open/ })).toBeNull();
+  expect(onOpenLink).not.toHaveBeenCalled();
 });
 
 it("keeps a background reply on the parent captured at Send", async () => {
@@ -3073,12 +3322,21 @@ it("cancels the newest background send, restores its draft and leaves older send
   await waitFor(() => expect(h.uploadCalls).toHaveLength(2));
   expect(h.input()).toHaveValue("");
 
-  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  // The pill and Cancel name the send Cancel stops.
+  expect(
+    screen.getByText("Uploading to thread in #General and 1 more"),
+  ).toHaveAttribute("role", "status");
+  await userEvent.click(
+    screen.getByRole("button", { name: "Cancel upload to thread in #General" }),
+  );
   expect(h.uploadCalls[1]?.signal.aborted).toBe(true);
   expect(h.uploadCalls[0]?.signal.aborted).toBe(false);
   await waitFor(() => expect(h.input()).toHaveValue("second"));
   expect(within(h.form()).getByText("two.txt")).toBeVisible();
-  expect(screen.queryByText(/^Upload failed: /)).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Cancel upload to #General" }),
+  ).toBeVisible();
+  expect(screen.queryByRole("dialog", { name: /failed/ })).toBeNull();
   expect(screen.getByRole("alert")).toHaveTextContent(
     "Upload paused. Retry to continue.",
   );
@@ -3119,7 +3377,9 @@ it.each([
   });
   await waitFor(() => expect(h.input()).toHaveValue("caption"));
   expect(within(h.form()).getByText("notes.txt")).toBeVisible();
-  expect(screen.getByText(/^Upload failed: /)).toBeVisible();
+  expect(
+    screen.getByRole("dialog", { name: "Upload to #General failed" }),
+  ).toBeVisible();
   expect(screen.queryByText(/^Uploading/)).toBeNull();
   expect(h.publish).not.toHaveBeenCalled();
 });
@@ -3165,7 +3425,9 @@ it("uses transferred sizes after image preparation and resets unknown totals on 
   await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
   const first = h.uploadCalls[0];
   expect(first?.file.size).toBeLessThan(gif.size);
-  const bar = screen.getByRole("progressbar", { name: "Uploading" });
+  const bar = screen.getByRole("progressbar", {
+    name: "Uploading to #General",
+  });
   act(() => first?.progress?.(first.file.size, first.file.size));
   // The next file has not been prepared: its transfer size is still unknown.
   expect(bar).not.toHaveAttribute("aria-valuenow");
@@ -3192,7 +3454,9 @@ it("uses transferred sizes after image preparation and resets unknown totals on 
   await userEvent.click(screen.getByRole("button", { name: /Retry/ }));
   fireEvent.click(h.send());
   await waitFor(() => expect(h.uploadCalls).toHaveLength(3));
-  const retryBar = screen.getByRole("progressbar", { name: "Uploading" });
+  const retryBar = screen.getByRole("progressbar", {
+    name: "Uploading to #General",
+  });
   expect(retryBar).not.toHaveAttribute("aria-valuenow");
   act(() => h.uploadCalls[2]?.progress?.(2, 20));
   expect(retryBar).toHaveAttribute(
@@ -3217,12 +3481,14 @@ it("fills the bar for a single-chunk upload while its response is held", async (
   attachByPaste(h.input(), attachmentFile());
   fireEvent.click(h.send());
   await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
-  const bar = screen.getByRole("progressbar", { name: "Uploading" });
+  const bar = screen.getByRole("progressbar", {
+    name: "Uploading to #General",
+  });
   expect(bar).not.toHaveAttribute("aria-valuenow");
   // The host's only report for a body within one chunk is the whole body.
   act(() => h.uploadCalls[0]?.progress?.(5, 5));
   expect(bar).toHaveAttribute("aria-valuenow", "100");
-  expect(screen.getByText("Uploading", { exact: true })).toBeVisible();
+  expect(screen.getByText("Uploading to #General")).toBeVisible();
   expect(h.publish).not.toHaveBeenCalled();
   await act(async () => {
     h.uploadCalls[0]?.result.resolve(uploadDescriptor());
@@ -3237,7 +3503,7 @@ it("never publishes a background send after its session closes", async () => {
   await userEvent.type(h.input(), "caption");
   fireEvent.click(h.send());
   await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
-  expect(screen.getByText("Uploading", { exact: true })).toBeVisible();
+  expect(screen.getByText("Uploading to #General")).toBeVisible();
 
   act(() => h.owner.dispose());
   expect(h.uploadCalls[0]?.signal.aborted).toBe(true);
@@ -11846,7 +12112,9 @@ it("retains a new card-only followup when a background upload fails", async () =
     chatCards: [link],
   });
   expect(
-    await screen.findByText(/Failed send was kept because this draft changed/),
+    await screen.findByText(
+      /^Failed send to #General was kept because its draft changed\./,
+    ),
   ).toBeVisible();
   expect(h.publish).not.toHaveBeenCalled();
 });

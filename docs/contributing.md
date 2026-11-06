@@ -430,13 +430,15 @@ files. Browser Blobs still retain complete prepared payloads; only the broker's
 transfer buffers are streaming. Private spool files and conversion children are
 request-owned, cancelled on disconnect and cleaned before admission is released.
 
-Picker/paste/drop share the same tab-local draft. Files must finish uploading
-before Send; navigation pauses unfinished uploads for explicit Retry. Reload loses
-unsent files. Background Send, attachment-first new chats and UX polish are
-separate work. Live uploads use the development broker in dev runs and the
-native `relay_upload` path in packaged desktop builds. The native host prepares
-HEIC and supported video/voice-note inputs with fixed demuxers and bounded child
-processes before upload; it requires ffmpeg installed on the host.
+Picker/paste/drop share the same tab-local draft. In the main window, Send hands
+unfinished uploads to a background send that keeps uploading across navigation and
+returns the draft and files to their conversation if it fails or is cancelled;
+other composers wait for uploads before sending. Navigation pauses a draft's
+unfinished uploads until its composer returns. Reload loses unsent files. Live
+uploads use the development broker in dev runs and the native `relay_upload` path
+in packaged desktop builds. The native host prepares HEIC and supported
+video/voice-note inputs with fixed demuxers and bounded child processes before
+upload; it requires ffmpeg installed on the host.
 
 The broker supports reads, live traffic and basic message sending **as your real
 account**. Profile changes and invite admission can also write to real communities.
