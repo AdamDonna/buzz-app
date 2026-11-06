@@ -2,7 +2,6 @@ import {
   AlarmIcon,
   BellIcon,
   BrowserIcon,
-  ChartBarIcon,
   ChatsCircleIcon,
   NoteIcon,
   GearIcon,
@@ -61,7 +60,6 @@ const bundledIcons = new Map<string, typeof BrowserIcon>([
   ["buzz.agents/agents", RobotIcon],
   ["buzz.workflows/workflows", LightningIcon],
   ["buzz.relay-notes/notes", NoteIcon],
-  ["buzz.usage/usage", ChartBarIcon],
 ]);
 /** Resolve host navigation policy once, independently of icons and registrations. */
 export function pagePlacement(page: RegisteredPage) {

@@ -1491,11 +1491,11 @@ uses goose's name.
 
 ## Usage
 
-Usage is a default-off page summarising what the selected community's agents
-on this computer spent: estimated cost against the previous period, tokens, cache
-hit rate (cache reads over all prompt tokens: uncached input, cache reads and
-cache writes), daily cost by agent
-type, and the costliest sessions, each opening its thread.
+Usage is a default-off Settings destination, under Plugins, summarising what
+the selected community's agents on this computer spent: estimated cost against
+the previous period, tokens, cache hit rate (cache reads over all prompt tokens:
+uncached input, cache reads and cache writes), daily cost by agent type, and the
+costliest sessions, each opening its thread.
 
 It reads nothing itself. An agent type that can report usage implements the
 optional, read-only `AgentType.usage(agent, { since, signal })`, returning a
