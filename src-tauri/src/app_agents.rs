@@ -177,6 +177,58 @@ impl AppAgentHost {
         valid_for: Duration,
     ) -> Result<(AppAgent, Arc<Secret>, Admission), String> {
         let incarnation = self.tokens.stamp(&pubkey, &relay)?;
+        self.signer_at(pubkey, relay, incarnation, valid_for).await
+    }
+    /// The owner's retirements so far, for a local caller's token issued now.
+    pub(crate) fn caller_retirements(&self) -> u64 {
+        self.tokens.retirements()
+    }
+    /// Whether the owner's identity was closed for good, so no local caller
+    /// may be issued, bound or act again.
+    pub(crate) fn caller_closed(&self) -> bool {
+        self.tokens.identity_closed()
+    }
+    /// The agent and its current incarnation, for a local caller's token that
+    /// acts as it from now on.
+    pub(crate) async fn caller_stamp(
+        &self,
+        pubkey: String,
+        relay: String,
+    ) -> Result<(AppAgent, Stamp), String> {
+        let incarnation = self.tokens.stamp(&pubkey, &relay)?;
+        Ok((self.agent(pubkey, relay).await?, incarnation))
+    }
+    /// Whether a token issued at [`Self::caller_retirements`] and bound at
+    /// [`Self::caller_stamp`] still acts: the agent was not deleted and the
+    /// owner did not sign out or change account since.
+    pub(crate) fn caller_live(
+        &self,
+        pubkey: &str,
+        relay: &str,
+        incarnation: Stamp,
+        retirements: u64,
+    ) -> bool {
+        !self.tokens.identity_closed()
+            && self.tokens.retirements() == retirements
+            && self.tokens.admits(pubkey, relay, incarnation)
+    }
+    /// The agent and its key, for a local caller's operation that sends nothing.
+    pub(crate) async fn caller_key(
+        &self,
+        pubkey: String,
+        relay: String,
+    ) -> Result<(AppAgent, Arc<Secret>), String> {
+        self.key(self.agent(pubkey, relay).await?).await
+    }
+    /// As [`Self::signer_for`], for work stamped earlier with `incarnation`:
+    /// deleting the agent since then refuses it.
+    pub(crate) async fn signer_at(
+        &self,
+        pubkey: String,
+        relay: String,
+        incarnation: Stamp,
+        valid_for: Duration,
+    ) -> Result<(AppAgent, Arc<Secret>, Admission), String> {
         let (agent, key) = self.key(self.agent(pubkey, relay).await?).await?;
         let evidence = self
             .tokens
@@ -317,6 +369,46 @@ impl AppAgentHost {
             agent
         })
         .await
+    }
+}
+
+#[cfg(test)]
+impl AppAgentHost {
+    /// A host whose only agent is `agent`, saved at `path`, its key already read.
+    pub(crate) fn holding(
+        path: PathBuf,
+        agent: &AppAgent,
+        key: Secret,
+        tokens: AgentTokens,
+    ) -> Self {
+        std::fs::write(&path, serde_json::to_vec(&[agent]).unwrap()).unwrap();
+        let host = Self::new(Ok(path), Err("unused".into()), true, tokens);
+        host.keys().insert(agent.pubkey.clone(), Arc::new(key));
+        host
+    }
+    /// Saves `agents` in place of the held ones and holds `key` too.
+    pub(crate) fn also_holding_for_test(&self, path: PathBuf, agents: &[&AppAgent], key: Secret) {
+        std::fs::write(path, serde_json::to_vec(agents).unwrap()).unwrap();
+        self.keys().insert(key.pubkey().into(), Arc::new(key));
+    }
+    /// This host reading keys from `credentials`, its key cache emptied.
+    #[cfg(test)]
+    pub(crate) fn with_credentials_for_test(mut self, credentials: Arc<dyn Credentials>) -> Self {
+        self.credentials = credentials;
+        self.keys().clear();
+        self
+    }
+    pub(crate) fn forget_row_for_test(&self, pubkey: &str, relay: &str) {
+        self.tokens.forget_row(pubkey, relay).unwrap();
+    }
+    pub(crate) fn reopen_row_for_test(&self, pubkey: &str, relay: &str) {
+        self.tokens.reopen_row(pubkey, relay).unwrap();
+    }
+    /// Holds every key read until dropped, pausing work that needs a key.
+    pub(crate) fn hold_keys_for_test(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Secret>>> {
+        self.keys()
     }
 }
 

@@ -1,5 +1,5 @@
-// Turns Agents deliveries into goose turns. Every agent of this type shares
-// one `goose-acp` process; a delivery becomes a prompt in the harness format,
+// Turns Agents deliveries into goose turns. Each agent of this type runs in
+// its own `goose-acp` process; a delivery becomes a prompt in the harness format,
 // sent to the agent's ACP session for its conversation; a watch or timer wake
 // runs as a one-off turn in a new session, in its Interest's lane. The run
 // returns once the turn is handed over, so one agent works in several
@@ -63,7 +63,7 @@ import {
   type ServeMcp,
   type ToolServer,
 } from "./goose";
-import { AgentSessions, localSessions, SharedProcess } from "./sessions";
+import { AgentProcess, AgentSessions, localSessions } from "./sessions";
 
 export type Config = Readonly<{
   /** A model the provider offers; empty uses the provider's default, or the
@@ -121,7 +121,9 @@ export function sessionTitle(
 type Entry = {
   lifetime: AbortController;
   protected?: boolean;
-  worker?: SharedProcess;
+  /** Its own goose, stopped once the agent goes. */
+  goose: AgentProcess;
+  worker?: AgentProcess;
   workerKey?: string;
   /** Every replaced provider's worker, which its successor waits out. */
   stopping?: Promise<void>;
@@ -148,14 +150,6 @@ type Entry = {
 
 export class GooseRuntime {
   private readonly agents = new Map<string, Entry>();
-  /** The goose every agent's sessions open in. */
-  private readonly goose = new SharedProcess(
-    {
-      spawn: (id, options) => this.desktop.spawn(id, options),
-      resolveDirectory: (path) => this.desktop.resolveDirectory(path),
-    },
-    (handler) => this.serve(handler),
-  );
   private readonly memoryReads = new MemoryReads();
   private readonly listeners = new Set<() => void>();
   private readonly views = new Map<
@@ -202,8 +196,7 @@ export class GooseRuntime {
   }
 
   /** Brings the runtime in line with this type's agents: changed settings
-   * reopen idle sessions, and removed agents stop. goose stops with the
-   * last. */
+   * reopen idle sessions, and removed agents stop, each with its goose. */
   private defaultsRevision = 0;
 
   /** Reopen inherited sessions on their next idle turn after Goose defaults save. */
@@ -231,6 +224,7 @@ export class GooseRuntime {
         try {
           await entry?.stopping;
           await entry?.worker?.shutdown();
+          await entry?.goose.shutdown();
         } catch (error) {
           failure ??= { error };
         }
@@ -247,18 +241,12 @@ export class GooseRuntime {
       // A failed retirement is retried by the next one, not kept.
       if (this.retirements.get(pubkey) === retiring)
         this.retirements.delete(pubkey);
-      this.stopWithLast();
     }
-  }
-  /** goose stops with the last agent, once its retirements are done. */
-  private stopWithLast() {
-    if (!this.agents.size && !this.retirements.size) this.goose.stop();
   }
   sync(agents: readonly Agent[]) {
     const current = new Set(agents.map((agent) => agent.key));
     for (const key of this.agents.keys())
       if (!current.has(key)) void this.retire(key).catch(() => undefined);
-    this.stopWithLast();
     for (const agent of agents) {
       if (this.retirements.has(agent.key)) continue;
       const next = config(agent.config);
@@ -364,9 +352,9 @@ export class GooseRuntime {
       entry.lifetime.abort(new Error("The Goose runtime was disposed"));
       entry.sessions.dispose();
       entry.worker?.stop();
+      entry.goose.stop();
     }
     this.agents.clear();
-    this.goose.stop();
   }
 
   async run({
@@ -812,6 +800,15 @@ export class GooseRuntime {
       config: initial,
       team: "",
       sessions: undefined as unknown as AgentSessions,
+      goose: new AgentProcess(
+        {
+          spawn: (id, options) => this.desktop.spawn(id, options),
+          resolveDirectory: (path) => this.desktop.resolveDirectory(path),
+        },
+        (handler) => this.serve(handler),
+        undefined,
+        () => entry.handle,
+      ),
       contexts: new Map(),
       policies: new Map(),
     };
@@ -862,7 +859,7 @@ export class GooseRuntime {
       if (!protection) {
         if (entry.protected)
           throw new Error("The protected agent has no live policy binding");
-        return this.goose.get();
+        return entry.goose.get();
       }
       protection.assertAvailable();
       // Another key means a replaced provider, which is already stopping its
@@ -875,10 +872,11 @@ export class GooseRuntime {
         delete entry.worker;
       }
       entry.workerKey = protection.key;
-      entry.worker ??= new SharedProcess(
+      entry.worker ??= new AgentProcess(
         this.desktop,
         (handler) => this.serve(handler),
         protection,
+        () => entry.handle,
       );
       const worker = entry.worker;
       const { stopping } = entry;

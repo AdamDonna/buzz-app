@@ -1400,6 +1400,7 @@ export class ClaudeRuntime {
           ),
         ]);
         const directories = key ? entry.directories.get(key) : undefined;
+        const handle = entry.handle;
         return {
           ...where(entry.config),
           ...(gate
@@ -1430,6 +1431,9 @@ export class ClaudeRuntime {
               }
             : {}),
           ...(!this.target && directories ? { directories } : {}),
+          ...(handle
+            ? { agent: { pubkey: handle.pubkey, relay: handle.relay } }
+            : {}),
           hook: (session, event, input) =>
             this.hook(agent, session, event, input),
           tools: tools(workspace),

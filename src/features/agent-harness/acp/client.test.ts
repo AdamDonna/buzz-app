@@ -5,7 +5,7 @@ import {
   flush,
 } from "../../../bundled/goose/goose-testing";
 import { GOOSE } from "../../../bundled/goose/goose";
-import { SharedProcess } from "../../../bundled/goose/sessions";
+import { AgentProcess } from "../../../bundled/goose/sessions";
 import type {
   HostMcpServer,
   HostProcess,
@@ -605,7 +605,7 @@ describe("the shared server pool", () => {
       label: "goose",
       resolveDirectory: goose.resolveDirectory,
       tools,
-      process: new SharedProcess(goose, goose.serve),
+      process: new AgentProcess(goose, goose.serve),
       pool,
       launch,
       choice,

@@ -13,8 +13,8 @@ mod profile;
 mod secret;
 
 pub use app_agent::{
-    AppAgent, AppAgents, NewAppAgent, Published, Removal, CANVAS_MAX_EVENT_BYTES, JOINED,
-    LIVE_CANVAS_BYTES,
+    bounded, framed, AppAgent, AppAgents, NewAppAgent, Published, Removal, CANVAS_MAX_EVENT_BYTES,
+    JOINED, LIVE_CANVAS_BYTES,
 };
 mod protection;
 pub use create::CreationProfile;

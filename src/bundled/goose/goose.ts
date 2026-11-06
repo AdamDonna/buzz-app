@@ -177,6 +177,7 @@ export const GooseProcess = {
       protected?: boolean;
       signal?: AbortSignal;
       onProcess?: (goose: AcpProcess) => void;
+      agent?: Readonly<{ pubkey: string; relay: string }>;
     }>,
   ) => {
     const goose = await AcpProcess.start(spawn, GOOSE, {

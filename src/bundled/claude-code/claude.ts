@@ -59,6 +59,8 @@ export type ClaudeLaunch = Readonly<{
   /** The in-process MCP server's tools. */
   tools?: ToolServer;
   hook?: ClaudeHook;
+  /** The agent it works for: the `buzz` it runs acts as that agent. */
+  agent?: Readonly<{ pubkey: string; relay: string }>;
 }>;
 
 /** Answers the in-process server's JSON-RPC for the conversation a process
@@ -300,6 +302,8 @@ export class ClaudeProcess {
           : []),
       ],
       cwd: launch.cwd,
+      // A spare is started before the agent it serves is known.
+      agentCredential: !launch.discovery,
       env: {
         ...ENV,
         ...(launch.discovery
@@ -394,9 +398,16 @@ export class ClaudeProcess {
   async initialize(
     launch: Pick<
       ClaudeLaunch,
-      "systemPrompt" | "tools" | "protection" | "hook"
+      "systemPrompt" | "tools" | "protection" | "hook" | "agent"
     >,
   ) {
+    if (launch.agent)
+      // An inherited token that acts for nobody fails every `buzz` call, so a
+      // process that cannot act as its agent is stopped, as other harnesses do.
+      await this.process.actAs?.(launch.agent).catch((error: unknown) => {
+        void this.kill();
+        throw error;
+      });
     try {
       if (launch.tools) this.tools = launch.tools;
       this.hook = launch.protection ? undefined : launch.hook;

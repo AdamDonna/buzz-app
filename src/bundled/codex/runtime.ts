@@ -33,6 +33,7 @@ import type {
   TurnResult,
 } from "../../features/agents/service";
 import type { EventData } from "../../features/relay/events";
+import { CREDENTIAL_ENV } from "../../features/host/service";
 import { threadReference } from "../../features/relay/thread-reference";
 import type { ChannelLabel } from "../../features/channels/channel-icon";
 import { appClient, readFile } from "../../buzz-mcp/app-client";
@@ -2208,7 +2209,7 @@ export class CodexRuntime {
    * model and effort its turn runs on: `pick`'s when available. */
   private async prepare(
     rpc: AppServer,
-    agent: Pick<AgentHandle, "key" | "name" | "pubkey">,
+    agent: Pick<AgentHandle, "key" | "name" | "pubkey" | "relay">,
     settings: Config,
     workspace: string,
     pick: Readonly<{ model?: string; effort?: string }>,
@@ -2270,6 +2271,8 @@ export class CodexRuntime {
           hookAdapter.run(agent.key, session, event, input),
         )
       : undefined;
+    // Codex sets it on this thread's commands only; app-server has none.
+    const credential = await rpc.toolCredential(agent);
     const params = {
       model,
       cwd: workspace,
@@ -2284,6 +2287,9 @@ export class CodexRuntime {
         mcp_servers: { ...mcp, ...bridge?.config },
         "features.plugins": false,
         "features.apps": false,
+        ...(credential && {
+          [`shell_environment_policy.set.${CREDENTIAL_ENV}`]: credential,
+        }),
       },
     };
     // Ask for reasoning summaries unless the user chose a summary mode.

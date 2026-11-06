@@ -361,6 +361,22 @@ pub fn add(service: &str, account: &str, value: &[u8]) -> Result<()> {
         .map_err(mac_error)
 }
 
+/// Write a credential whether or not one is saved, updating a saved item in
+/// place so a failed write keeps it. For settings, never for identities.
+#[cfg(all(not(test), target_os = "macos"))]
+pub fn replace(service: &str, account: &str, value: &[u8]) -> Result<()> {
+    use security_framework::os::macos::keychain::SecKeychain;
+    let _lock = acquire(&lock_root()?, service, account)?;
+    let keychain = SecKeychain::default().map_err(mac_error)?;
+    match keychain.find_generic_password(service, account) {
+        Ok((_, mut item)) => item.set_password(value).map_err(mac_error),
+        Err(error) if mac_error(error) == Error::Absent => keychain
+            .add_generic_password(service, account, value)
+            .map_err(mac_error),
+        Err(error) => Err(mac_error(error)),
+    }
+}
+
 /// Delete only the exact credential, under the same lock as [`copy`], and
 /// confirm it is gone: Keychain's delete reports no failure.
 #[cfg(all(not(test), target_os = "macos"))]

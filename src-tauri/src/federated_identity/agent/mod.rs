@@ -152,6 +152,10 @@ impl Admission {
     pub(crate) fn header(&self) -> Option<&str> {
         self.cached.as_ref().map(|cached| cached.header.as_str())
     }
+    pub(crate) fn assertion(&self) -> Option<&str> {
+        self.header()
+            .and_then(|header| header.strip_prefix("Bearer "))
+    }
     pub(crate) fn dispatch(&self) -> Result<(), String> {
         self.commit(false, || Ok(()))?;
         if self
@@ -227,6 +231,11 @@ impl AgentTokens {
             FederatedIdentity::unconfigured(),
             Arc::new(grant::tests::MemoryGrants::default()),
         )
+    }
+    /// Grants kept in memory, for `identity`'s owner.
+    #[cfg(test)]
+    pub(crate) fn in_memory(identity: FederatedIdentity) -> Self {
+        Self::with_store(identity, Arc::new(grant::tests::MemoryGrants::default()))
     }
     #[cfg(test)]
     fn with_store(identity: FederatedIdentity, store: Arc<dyn GrantStore>) -> Self {
@@ -407,6 +416,31 @@ impl AgentTokens {
         at.generation
     }
 
+    /// Whether work stamped `incarnation` for this agent row may still run:
+    /// neither the agent nor its community row was deleted since.
+    pub(crate) fn admits(&self, agent: &str, relay: &str, incarnation: Stamp) -> bool {
+        let Ok(row) = row_key(agent, relay) else {
+            return false;
+        };
+        let at = lock(&self.0.incarnations);
+        let (key, row) = (
+            at.get(agent).copied().unwrap_or_default(),
+            at.get(&row).copied().unwrap_or_default(),
+        );
+        !key.closed
+            && key.generation == incarnation.key
+            && !row.closed
+            && row.generation == incarnation.row
+    }
+    /// The owner's retirements so far: sign-out, another account, or a
+    /// retired grant each add one.
+    pub(crate) fn retirements(&self) -> u64 {
+        self.0.identity.retirements()
+    }
+    /// Whether the owner's identity was closed for good.
+    pub(crate) fn identity_closed(&self) -> bool {
+        self.0.identity.closed()
+    }
     pub(crate) fn stamp(&self, agent: &str, relay: &str) -> Result<Stamp, String> {
         let row = row_key(agent, relay)?;
         let at = lock(&self.0.incarnations);
@@ -748,6 +782,7 @@ impl AgentTokens {
                 Ok(before)
             })
             .await?;
+        let recorded = self.0.identity.record_retirement().await?;
         // Publish retirement before releasing the wipe lock, then wait for
         // session persistence without holding it (restore takes operation first).
         let Some(retiring) = self.0.identity.begin_sign_out(expected) else {
@@ -761,6 +796,7 @@ impl AgentTokens {
             .await?;
             return Ok(self.0.identity.snapshot());
         };
+        drop(recorded);
         drop(_wiping);
         let snapshot = self.0.identity.finish_sign_out(retiring).await;
         let _wiping = self.0.wiping.lock().await;

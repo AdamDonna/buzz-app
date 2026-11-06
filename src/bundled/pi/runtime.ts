@@ -1137,8 +1137,11 @@ export class PiRuntime {
   }
 
   private async open(agent: AgentKey) {
+    const handle = this.agents.get(agent)?.handle ?? this.handle(agent);
     await this.pi.request("open", {
       agent,
+      // Whichever host runs the agent fills in its tools' credential.
+      ...(handle && { as: { pubkey: handle.pubkey, relay: handle.relay } }),
       tools: sessionTools(this.added()),
       hint: sessionHint(this.added()),
     });

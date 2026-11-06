@@ -133,6 +133,10 @@ struct Inner {
     agent_tokens: Mutex<std::sync::Weak<agent::Inner>>,
     assertions: Mutex<assertion::AssertionCache>,
     discoveries: Mutex<assertion::DiscoveryCache>,
+    retiring: Mutex<Option<Retiring>>,
+    /// Holds the next renewal between recording its retirement and installing.
+    #[cfg(test)]
+    install_gate: Mutex<Option<testing::Gate>>,
     /// The build's other sign-in servers, each with its own session. Only the
     /// first server, the build's Builderlab, has them.
     peers: Vec<FederatedIdentity>,
@@ -140,6 +144,16 @@ struct Inner {
     #[cfg(test)]
     revocations: Mutex<Vec<tauri::async_runtime::JoinHandle<()>>>,
 }
+/// Records durably, before a sign-out or change of account commits, what
+/// else that retirement revokes; see [`FederatedIdentity::on_retire`]. The
+/// change holds what it returns until it has committed or failed.
+pub(crate) type Retiring = Arc<
+    dyn Fn() -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<RetiringGuard>, String>> + Send>,
+        > + Send
+        + Sync,
+>;
+pub(crate) type RetiringGuard = Box<dyn Send + Sync>;
 /// A sign-in server's session. The app holds the build's first server, which
 /// routes each community to its own server (`server_for`).
 #[derive(Clone)]
@@ -245,9 +259,12 @@ impl FederatedIdentity {
             operation: AsyncMutex::new(()),
             changes,
             account_changes,
+            #[cfg(test)]
+            install_gate: Mutex::default(),
             agent_tokens: Mutex::default(),
             assertions: Mutex::new(Default::default()),
             discoveries: Mutex::new(Default::default()),
+            retiring: Mutex::default(),
             peers,
             #[cfg(test)]
             revocations: Mutex::default(),
@@ -298,6 +315,27 @@ impl FederatedIdentity {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// Has every sign-out and change of account first record `retiring`
+    /// durably; one it cannot record does not happen.
+    pub(crate) fn on_retire(&self, retiring: Retiring) {
+        *self
+            .0
+            .retiring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(retiring);
+    }
+    pub(crate) async fn record_retirement(&self) -> Result<Option<RetiringGuard>, String> {
+        let retiring = self
+            .0
+            .retiring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        match retiring {
+            Some(retiring) => retiring().await,
+            None => Ok(None),
+        }
     }
     fn publish(&self, state: &State) {
         self.0.changes.send_replace(state.snapshot.clone());
@@ -426,9 +464,30 @@ impl FederatedIdentity {
     pub(crate) fn agent_grant_key(&self, owner: &str, agent: &str) -> String {
         store::agent_grant_key(&self.0.account, owner, agent)
     }
+    /// The account a local pairing is bound to: the secure-store account and
+    /// the signed-in email (`None` without NIP-FI or when signed out). `None`
+    /// overall while that is not settled yet (restoring, signing in, expired,
+    /// unavailable), so nothing is judged against a session still loading.
+    pub(crate) fn pairing_account(&self) -> Option<(String, Option<String>)> {
+        let state = self.state();
+        let email = match state.snapshot.status {
+            Status::SignedIn => state.snapshot.email.clone(),
+            Status::Unconfigured | Status::SignedOut if !state.closed => None,
+            _ => return None,
+        };
+        Some((self.0.account.clone(), email))
+    }
+    /// Whether the sign-in expired and the person must sign in again.
+    pub(crate) fn expired(&self) -> bool {
+        self.state().snapshot.status == Status::ReauthenticationRequired
+    }
     /// How many times derived agent credentials have been retired this run.
     pub(crate) fn retirements(&self) -> u64 {
         self.state().retirements
+    }
+    /// Whether the identity was closed for good; nothing derived acts again.
+    pub(crate) fn closed(&self) -> bool {
+        self.state().closed
     }
     pub(crate) fn current(&self, revision: &str) -> bool {
         let state = self.state();
@@ -968,6 +1027,17 @@ impl FederatedIdentity {
             // with its session, so nothing below has to undo a cancel.
             state.renewal = None;
         }
+        let changing = matches!(&self.state().account, Some(previous) if *previous != record.email);
+        // Held until this renewal installs or fails.
+        let _retiring = if changing {
+            self.record_retirement()
+                .await
+                .map_err(|_| Failure::from("storage-unavailable"))?
+        } else {
+            None
+        };
+        #[cfg(test)]
+        self.pass_install_gate().await;
         let prepared = agent::AgentTokens::preparing_session(self, record.email.clone())
             .await
             .map_err(|_| Failure::from("storage-unavailable"))?;

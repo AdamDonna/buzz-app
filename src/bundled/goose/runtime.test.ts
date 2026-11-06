@@ -15,7 +15,7 @@ import type { RelayData } from "../../features/relay/service";
 import { fakeSpawn, flush, gated } from "./goose-testing";
 import { REQUEST_TIMEOUT_MS } from "./goose";
 import { AcpSession } from "../../features/agent-harness/acp/session";
-import { AgentSessions, SharedProcess } from "./sessions";
+import { AgentSessions, AgentProcess } from "./sessions";
 import {
   DEFAULT_CONFIG,
   GooseRuntime,
@@ -516,7 +516,7 @@ it("reports the retirement's own failure when stopping the worker fails too", as
     vi.spyOn(AgentSessions.prototype, "shutdown").mockRejectedValueOnce(
       new Error("stuck"),
     );
-    vi.spyOn(SharedProcess.prototype, "shutdown").mockRejectedValueOnce(
+    vi.spyOn(AgentProcess.prototype, "shutdown").mockRejectedValueOnce(
       new Error("worker"),
     );
     await expect(f.runtime.retire(f.agent.key)).rejects.toThrow("stuck");
@@ -526,7 +526,7 @@ it("reports the retirement's own failure when stopping the worker fails too", as
   }
 });
 
-it("keeps an ordinary agent stopped after a failed retirement, and repeats it until its sessions close", async () => {
+it("keeps an ordinary agent stopped after a failed retirement, with its own goose stopped, until a retirement succeeds", async () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const held = gated("session/close", () => true);
   const f = setup({ wrap: held.wrap });
@@ -545,12 +545,9 @@ it("keeps an ordinary agent stopped after a failed retirement, and repeats it un
     );
     expect(f.fake.geese).toHaveLength(1);
     expect(f.fake.geese[0]?.opened).toHaveLength(1);
-    // The close that failed stays failed while goose runs.
-    await expect(f.runtime.retire(f.agent.key)).rejects.toThrow(
-      "No active run",
-    );
-    f.fake.geese[0]?.exit(null);
-    await flush(30);
+    // Its goose is its own, so the failed retirement stopped it too, and
+    // the next retirement has no unclosed session left.
+    expect(f.fake.geese[0]?.killed).toBe(true);
     await f.runtime.retire(f.agent.key);
     await f.deliver(message("3", "Third"));
     await vi.waitFor(() => expect(f.fake.geese[1]?.turns).toHaveLength(1));
@@ -613,7 +610,7 @@ it("drops a delivery queued while its agent retires, without posting that goose 
   }
 });
 
-it("stops the shared Goose only once the last agent's retirement has closed its sessions", async () => {
+it("stops an agent's Goose only once its retirement has closed its sessions", async () => {
   const held = gated("session/close");
   const f = setup({ wrap: held.wrap });
   try {
@@ -1120,7 +1117,7 @@ describe("GooseRuntime", () => {
     expect(fake.geese[0]?.turns.map((turn) => turn.text)).toHaveLength(1);
   });
 
-  it("keeps goose while another agent runs, and stops it with the last", async () => {
+  it("runs each agent in its own goose, which stops once that agent goes", async () => {
     const { agent, deliver, fake, runtime } = setup();
     const other = {
       ...agent,
@@ -1137,12 +1134,12 @@ describe("GooseRuntime", () => {
     running(agent, other);
     await deliver(message("1", "@Gander hi"));
     await flush(100);
-    running(other);
-    await flush(30);
     const [goose] = fake.geese;
-    expect(goose?.closed).toEqual(["session-1"]);
     expect(goose?.killed).toBe(false);
-    running();
+    // Its credential, in its own process, acts as this agent only.
+    expect(goose?.options.agentCredential).toBe(true);
+    expect(goose?.actedAs?.pubkey).toBe(agent.pubkey);
+    running(other);
     await flush(30);
     expect(goose?.killed).toBe(true);
     expect(fake.geese).toHaveLength(1);

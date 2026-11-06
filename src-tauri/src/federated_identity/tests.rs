@@ -935,7 +935,7 @@ fn expiry_watch_follows_the_wall_clock_across_sleep() {
 }
 
 /// Signed in at `base`, which serves both the adapter and the identity origin.
-fn signed_in_at(
+pub(super) fn signed_in_at(
     store: Arc<Memory>,
     base: String,
     email: &str,

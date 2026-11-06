@@ -990,12 +990,13 @@ Each local agent enrolls using the signed-in owner's session and its own NIP-98
 proof. The native agent-token owner stores the resulting grant beside session
 records in the same OS secure-store service, keyed by profile, deployment, owner
 public key and agent public key: in the session's item on macOS, under a
-separate key elsewhere. Grants never cross IPC, and assertion headers cross it
-only as the `repo` tool's Git headers. There the NIP-98 proof is bound to one
-repository URL for 60 seconds, while the assertion is scoped to the relay for
-the lifetime its issuer set and bound to the agent's key, so it is unusable
-without that key (NIP-FI, Assertion–key binding). Git asks for an assertion
-valid for at least 70 seconds and fails rather than accept a shorter one.
+separate key elsewhere. Grants never cross IPC. An assertion header leaves
+native code in two places only, each bound to the agent's key (NIP-FI,
+Assertion–key binding), so it is useless without that key's signatures. The
+`repo` tool's Git headers pair it with a NIP-98 proof bound to one repository
+URL for 60 seconds; Git asks for an assertion valid for at least 70 seconds and
+fails rather than accept a shorter one. The local credential service below
+answers `federated_identity` with an assertion valid for at least 60 seconds.
 Enrollment validates the returned owner and issuer;
 assertions are checked for the agent key, issuer, relay audience and lifetime.
 The relay remains responsible for signature and authorization verification.
@@ -1021,6 +1022,46 @@ The `/v1/nip-fi/agent-grant` and `/v1/nip-fi/agent-assertion` routes and
 standard endpoints defined by NIP-FI/NIP-FA. NIP-FI defines the
 `nip-fi-agent+jwt` assertion class and owner checks; that does not establish
 interoperability with another adapter's enrollment endpoints.
+
+### Local credential service
+
+A process the app launches for an agent can run the `buzz` CLI as that agent
+without its key. Native code serves block/buzz's local credential provider
+contract (`docs/local-credential-provider.md`) on `127.0.0.1` and puts the
+caller's endpoint and a fresh 256-bit token in the process's
+`BUZZ_CREDENTIAL_PROVIDER`. The service looks tokens up by their SHA-256, and
+no token is written to disk or logged. A host shared by several agents (Codex,
+Pi) also keeps each agent's raw token in memory, and the page passes it over
+Tauri IPC and the host's stdin to that agent's tools. The CLI builds each event and asks
+the service to sign it; keys, NIP-44 conversation keys and grants never leave
+native code.
+
+- **One identity.** A token acts for nobody until the runtime binds it, once, to
+  the agent its process serves. A plugin may bind only to an agent of its own
+  type. Claude Code's shared spare is bound when an agent takes it.
+- **What it signs.** Every event passes the contract's operation policy before
+  signing. NIP-42, NIP-98 and Blossom proofs are signed only for the token's own
+  community and only when created within a minute of now. Ordinary content kinds
+  are signed as built. Profile, contacts, deletions, membership, moderation and
+  agent-management kinds are refused with `denied`: a local tool can't sign
+  them, and there is no approval prompt. Every other kind is denied too.
+- **Evidence.** `federated_identity` goes through the same agent grant and
+  assertion checks as the app's own requests and answers no header on relays
+  without NIP-FI. `auth_tag` answers the agent's NIP-OA tag.
+- **Limits and revocation.** Each token has a request budget per method and
+  answers `rate_limited` with a retry delay. It is revoked as soon as its
+  process exits, even while a descendant still holds its output or
+  environment, and for good once its agent is deleted, the owner signs out or
+  changes account, or the identity closes: each request rechecks the owner's
+  retirement count recorded when the token was issued and the agent's
+  incarnation recorded at binding, and a
+  closed identity issues no token.
+- **Callers.** Requests must name the bound address in `Host` and carry no
+  `Origin`, so a web page cannot use it. A process serving one agent
+  carries its token (Claude Code, and goose, which runs one process per
+  agent). A process serving several (Codex, Pi) carries none; each agent's
+  token goes only into that agent's tool commands and is revoked when the
+  process exits. Windows has no transport in version 1 and gets none.
 
 Builderlab's remote-agent, hosted-community, known-community, Decisions, Apps,
 Apps viewer and backup calls all use the native FI session of the build's first

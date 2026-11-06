@@ -489,6 +489,12 @@ fn signs_live_canvas_up_to_its_content_and_complete_event_limits() {
         .is_err());
     // Other kinds keep the ordinary bound.
     assert!(agent.sign(&key, 9, "x".repeat(64 * 1024 + 1), h()).is_err());
+    // A caller-built event has the same bounds.
+    let built = |content: String| agent.sign_built(&key, 40100, content, h(), 1_800_000_000);
+    let event = built("x".repeat(LIVE_CANVAS_BYTES)).unwrap();
+    assert!(serde_json::to_vec(&event).unwrap().len() <= CANVAS_MAX_EVENT_BYTES);
+    assert!(built("x".repeat(LIVE_CANVAS_BYTES + 1)).is_err());
+    assert!(built("\"".repeat(LIVE_CANVAS_BYTES)).is_err());
 }
 
 #[test]
