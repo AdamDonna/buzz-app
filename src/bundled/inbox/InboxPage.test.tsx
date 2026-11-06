@@ -1830,7 +1830,7 @@ it("excludes archived-channel mentions and threads without hiding active DMs", a
   // The sender avatar reuses the thumbnail message rows load, not the original.
   expect(rows()[0]?.querySelector("img")).toHaveAttribute(
     "src",
-    alicePicture.replace(/\.png$/, ".thumb.jpg"),
+    alicePicture.replace(/\.png$/, ".thumb.webp"),
   );
   await chooseFilter("Mentions");
   expect(rows()).toHaveLength(0);

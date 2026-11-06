@@ -1467,7 +1467,7 @@ it("routes relay media through the authenticated native scheme only", async () =
     `buzz-media://localhost/${encodeURIComponent(media)}`,
   );
   expect(transport.media(media, "small")).toBe(
-    `buzz-media://localhost/${encodeURIComponent(`${community}/media/${hash}.thumb.jpg`)}`,
+    `buzz-media://localhost/${encodeURIComponent(`${community}/media/${hash}.thumb.webp`)}`,
   );
   expect(transport.media("https://images.test/cat.png")).toBe(
     "https://images.test/cat.png",

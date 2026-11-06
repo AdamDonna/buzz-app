@@ -1809,6 +1809,73 @@ fn js_signs_emoji_sets_but_never_blossom_tokens() {
     assert!(validate_event("https://relay.test", &template(24242)).is_err());
 }
 
+/// Answers each request with `status` for `.thumb.webp` and the JPEG
+/// otherwise, and records every requested path.
+fn thumbnail_server(status: &'static str) -> (Url, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = paths.clone();
+    std::thread::spawn(move || {
+        for socket in listener.incoming() {
+            let mut socket = socket.unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 4096];
+            while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            let path = String::from_utf8_lossy(&bytes)
+                .split(' ')
+                .nth(1)
+                .unwrap()
+                .to_owned();
+            let response = if path.ends_with(".thumb.webp") {
+                format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            } else {
+                "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\nConnection: close\r\n\r\njpeg".into()
+            };
+            seen.lock().unwrap().push(path);
+            socket.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (base, paths)
+}
+
+#[tokio::test]
+async fn webp_thumbnails_fall_back_to_jpeg_only_when_missing() {
+    let hash = "a".repeat(64);
+    let webp = format!("/media/{hash}.thumb.webp");
+    let jpeg = format!("/media/{hash}.thumb.jpg");
+    let (base, paths) = thumbnail_server("404 Not Found");
+    let response = serve_media(
+        &IdentityHost::fixture(),
+        None,
+        base.join(&webp).unwrap(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.body(), b"jpeg");
+    assert_eq!(*paths.lock().unwrap(), [webp.clone(), jpeg]);
+
+    let (base, paths) = thumbnail_server("401 Unauthorized");
+    let status = serve_media(
+        &IdentityHost::fixture(),
+        None,
+        base.join(&webp).unwrap(),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(status, 401);
+    assert_eq!(*paths.lock().unwrap(), [webp]);
+
+    let png = Url::parse(&format!("https://relay.test/media/{hash}.png")).unwrap();
+    assert_eq!(jpeg_thumb(&png), None);
+}
+
 #[test]
 fn media_proxy_only_reaches_relay_blobs() {
     let hash = "a".repeat(64);

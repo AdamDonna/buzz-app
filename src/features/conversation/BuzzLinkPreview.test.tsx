@@ -381,6 +381,6 @@ it("asks for the relay thumbnail of the author's picture, as message rows do", (
     ]),
   );
   expect(tree.querySelector("img")?.getAttribute("src")).toBe(
-    `https://relay.test/media/${sha}.thumb.jpg`,
+    `https://relay.test/media/${sha}.thumb.webp`,
   );
 });

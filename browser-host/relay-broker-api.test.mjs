@@ -1033,6 +1033,26 @@ test("media proxy rejects malformed ranges before upstream I/O", async () => {
   }
 });
 
+test("media proxy falls back to the JPEG thumbnail an older relay has", async () => {
+  const webp = `${fixtureRelayUrl}/media/${blob}.thumb.webp`;
+  const jpeg = `${fixtureRelayUrl}/media/${blob}.thumb.jpg`;
+  const h = await harness((call) =>
+    call.url.endsWith(".thumb.webp")
+      ? new Response("missing", { status: 404 })
+      : new Response("jpeg", { headers: { "Content-Type": "image/jpeg" } }),
+  );
+  try {
+    const response = await fetch(
+      `${h.base}/api/relay/media?url=${encodeURIComponent(webp)}`,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("jpeg");
+    expect(h.calls.map((call) => call.url)).toEqual([webp, jpeg]);
+  } finally {
+    await h.close();
+  }
+});
+
 test("media proxy accepts only the media URLs the native proxy accepts", async () => {
   const relayHost = new URL(fixtureRelayUrl).host;
   const scheme = new URL(fixtureRelayUrl).protocol;

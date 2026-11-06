@@ -239,7 +239,7 @@ export function mediaUrl(
       size === "small"
         ? still.replace(
             /\/([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?$/,
-            "/$1.thumb.jpg",
+            "/$1.thumb.webp",
           )
         : still;
     return relayProxy?.(media);

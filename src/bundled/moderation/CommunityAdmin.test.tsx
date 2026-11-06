@@ -476,7 +476,7 @@ it.each([
     // the raw URL would be an unsigned request the relay refuses.
     expect(actionsA.closest("li")?.querySelector("img")).toHaveAttribute(
       "src",
-      `https://primary.example/media/${bobA}.thumb.jpg`,
+      `https://primary.example/media/${bobA}.thumb.webp`,
     );
     await user.click(
       screen.getByRole("button", { name: `Actions for ${labelB}` }),

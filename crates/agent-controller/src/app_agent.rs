@@ -169,7 +169,7 @@ impl AppAgent {
         let valid = match parts.as_slice() {
             [hash] => crate::config::canonical_key(hash),
             [hash, part] => crate::config::canonical_key(hash) && ext(part),
-            [hash, "thumb", "jpg"] => crate::config::canonical_key(hash),
+            [hash, "thumb", "jpg" | "webp"] => crate::config::canonical_key(hash),
             _ => false,
         };
         if !valid {
@@ -186,8 +186,8 @@ impl AppAgent {
             .next()
             .and_then(|name| name.get(..64))
             .ok_or("Invalid media hash")?;
-        if canonical.ends_with(".thumb.jpg") {
-            // Thumbnails are derived JPEGs, but keep the source blob's name.
+        if canonical.ends_with(".thumb.jpg") || canonical.ends_with(".thumb.webp") {
+            // Thumbnails are derived images, but keep the source blob's name.
             return Ok(());
         }
         if sha256 != expected {

@@ -597,6 +597,8 @@ fn signs_uploads_and_memory_for_its_own_community_and_owner() {
     assert!(agent.verify_media_hash(&media, &"0".repeat(64)).is_err());
     let thumbnail = format!("{}/media/{sha}.thumb.jpg", agent.endpoint(""));
     assert!(agent.verify_media_hash(&thumbnail, &"0".repeat(64)).is_ok());
+    let webp = format!("{}/media/{sha}.thumb.webp", agent.endpoint(""));
+    assert!(agent.verify_media_hash(&webp, &"0".repeat(64)).is_ok());
     for input in [
         format!("https://elsewhere.test/media/{sha}.png"),
         format!("{media}?x=1"),

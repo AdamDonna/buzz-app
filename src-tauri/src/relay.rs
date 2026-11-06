@@ -1613,10 +1613,7 @@ pub(crate) fn media_protocol<R: tauri::Runtime>(
         .clone();
     tauri::async_runtime::spawn(async move {
         let response = match media_request(&request) {
-            Ok((url, Some((start, end)))) => {
-                media_blocks::read(&host, Some(&fi), &url, start, end, WHOLE_VIDEO_MAX).await
-            }
-            Ok((url, None)) => fetch_media(&host, Some(&fi), url, None).await,
+            Ok((url, range)) => serve_media(&host, Some(&fi), url, range).await,
             Err(status) => Err(status),
         };
         let mut response = response.unwrap_or_else(|status| {
@@ -2096,6 +2093,40 @@ fn media_request(
         Some(value) => Some(media_range(value.to_str().map_err(|_| 416u16)?).ok_or(416u16)?),
     };
     Ok((url, range))
+}
+
+async fn serve_media(
+    host: &IdentityHost,
+    fi: Option<&FederatedIdentity>,
+    url: Url,
+    range: Option<(u64, u64)>,
+) -> std::result::Result<tauri::http::Response<Vec<u8>>, u16> {
+    let fallback = jpeg_thumb(&url);
+    match (serve_blob(host, fi, url, range).await, fallback) {
+        (Err(404), Some(url)) => serve_blob(host, fi, url, range).await,
+        (response, _) => response,
+    }
+}
+
+async fn serve_blob(
+    host: &IdentityHost,
+    fi: Option<&FederatedIdentity>,
+    url: Url,
+    range: Option<(u64, u64)>,
+) -> std::result::Result<tauri::http::Response<Vec<u8>>, u16> {
+    match range {
+        Some((start, end)) => media_blocks::read(host, fi, &url, start, end, WHOLE_VIDEO_MAX).await,
+        None => fetch_media(host, fi, url, None).await,
+    }
+}
+
+/// Relays before WebP thumbnails, and images uploaded before them, have only
+/// the `.thumb.jpg` that every relay writes.
+fn jpeg_thumb(url: &Url) -> Option<Url> {
+    let stem = url.path().strip_suffix(".thumb.webp")?;
+    let mut url = url.clone();
+    url.set_path(&format!("{stem}.thumb.jpg"));
+    Some(url)
 }
 
 /// Only relay-hosted blobs on an HTTPS origin; never an arbitrary URL.
