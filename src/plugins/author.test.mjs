@@ -242,6 +242,38 @@ import type { createServices } from "@buzz/author";
 `,
     );
     await writeFile(
+      join(dir, "plugin-status-consumer.ts"),
+      `
+import type { Context } from "@buzz/author";
+export function observePlugin(ctx: Context) {
+  const owner = ctx.pluginOwner;
+  if (!owner) return;
+  const id: string = owner.id;
+  const revision: string = owner.revision;
+  const active: boolean = ctx.pluginStatus.isActive(id, revision);
+  const stop: () => void = ctx.pluginStatus.subscribe(() => {
+    const current: boolean = ctx.pluginStatus.isActive(id, revision);
+    void current;
+  });
+  stop();
+  const settled: boolean | undefined = ctx.pluginStatus.settled?.();
+  const withoutReadiness: Context["pluginStatus"] = {
+    isActive: () => true,
+    subscribe: () => () => {},
+  };
+  void [active, settled, withoutReadiness];
+  // @ts-expect-error A revision is a string, not a generation number.
+  ctx.pluginStatus.isActive(id, 1);
+  // @ts-expect-error Subscription requires a callback.
+  ctx.pluginStatus.subscribe("changed");
+  // @ts-expect-error Readiness is optional and must be checked.
+  ctx.pluginStatus.settled();
+  // @ts-expect-error Installed ownership is readonly.
+  owner.revision = "replacement";
+}
+`,
+    );
+    await writeFile(
       join(dir, "tsconfig.json"),
       JSON.stringify({
         compilerOptions: {
@@ -256,7 +288,7 @@ import type { createServices } from "@buzz/author";
             "@buzz/author": ["./author package/types/plugins/author.d.ts"],
           },
         },
-        files: ["consumer.ts"],
+        files: ["consumer.ts", "plugin-status-consumer.ts"],
       }),
     );
     // Only generated declarations and the external consumer, never host source.
