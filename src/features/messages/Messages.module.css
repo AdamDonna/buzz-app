@@ -3444,6 +3444,12 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   margin-inline: auto;
   padding-block: var(--space-half) 0;
 }
+.failureNotice {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
 .audienceRow[data-layout="timeline"],
 .feed .audienceRow[data-layout="continuation"] {
   --activity-avatar-size: var(--size-control);
@@ -3521,9 +3527,25 @@ html[data-keyboard-navigation] .audienceEntry:has(.audienceLine:focus-visible) {
   grid-area: 1 / 1;
   inline-size: calc(1.5rem + var(--space-1) + var(--space-1h));
 }
+.audienceRow[data-message-notice] .audienceEntry {
+  display: flex;
+  align-items: stretch;
+  padding-inline-start: 0;
+}
+.audienceRow[data-message-notice] .audienceLine {
+  inline-size: fit-content;
+}
 .audiencePanel {
   grid-area: 1 / 2;
   min-inline-size: 0;
+}
+.audienceRow[data-message-notice] .audiencePanel {
+  margin-inline-start: calc(
+    var(--space-3) +
+    var(--space-1) +
+    var(--space-6) +
+    var(--space-2)
+  );
 }
 /* Base UI measures the full text; the collapsed endpoint is one avatar row. */
 .audienceBody {
@@ -3883,6 +3905,18 @@ html[data-keyboard-navigation] .activityExpansion {
   line-height: var(--text-message--line-height);
   letter-spacing: var(--text-message--letter-spacing);
   font-weight: var(--text-message--font-weight);
+}
+
+.audienceRow[data-message-notice][data-viewer-message] .audienceEntry {
+  inline-size: fit-content;
+  max-inline-size: calc(100% - var(--size-control-sm) - var(--activity-gap));
+  margin-inline-start: auto;
+  margin-inline-end: calc(var(--size-control-sm) + var(--activity-gap));
+}
+.audienceRow[data-message-notice][data-viewer-message] .audienceLine {
+  align-self: flex-end;
+  max-inline-size: 100%;
+  margin-inline-start: 0;
 }
 
 /* Keep a working team inside the same footprint as one message avatar. */

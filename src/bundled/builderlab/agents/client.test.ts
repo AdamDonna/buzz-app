@@ -72,6 +72,44 @@ it("refuses remote reads and creation before sending requests or retaining repla
   expect(h.host.request).not.toHaveBeenCalled();
   expect(h.retain).not.toHaveBeenCalled();
 });
+it("reads terminal task status only for the requested task IDs", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request).mockResolvedValueOnce(
+    response({
+      outcomes: {
+        done: "completed",
+        failed: "failed",
+        stopped: "cancelled",
+        terminated: "terminated",
+      },
+    }),
+  );
+  expect(
+    await h.client.turnStatus(
+      "session",
+      ["done", "failed", "stopped", "terminated"],
+      h.signal,
+    ),
+  ).toEqual(
+    new Map([
+      ["done", "ended"],
+      ["failed", "error"],
+      ["stopped", "stopped"],
+      ["terminated", "error"],
+    ]),
+  );
+  for (const outcomes of [
+    { other: "completed" },
+    { done: "new-status" },
+    { done: null },
+    [],
+  ]) {
+    vi.mocked(h.host.request).mockResolvedValueOnce(response({ outcomes }));
+    await expect(
+      h.client.turnStatus("session", ["done"], h.signal),
+    ).rejects.toThrow("invalid turn status");
+  }
+});
 it("lists the authenticated account through the configured native host", async () => {
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(

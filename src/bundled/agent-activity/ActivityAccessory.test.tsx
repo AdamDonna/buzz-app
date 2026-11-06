@@ -200,9 +200,7 @@ it("does not show sibling thread work and reports lost freshness without pretend
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     f.send(B, "here", 1, "turn_started", { triggeringEventIds: [root] });
     act(() => vi.advanceTimersByTime(31000));
-    expect(
-      screen.getByRole("button", { name: /View agent activity: Bubbles/ }),
-    ).toHaveTextContent("Status unknown");
+    expect(screen.getByText("Status unavailable")).toBeInTheDocument();
     f.send(B, "here", 2, "turn_completed");
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   } finally {
@@ -210,6 +208,118 @@ it("does not show sibling thread work and reports lost freshness without pretend
     f.dispose();
   }
 });
+it("keeps a stopped agent visible beside another agent's persistent failure", () => {
+  const f = fixture();
+  const view = render(<ActivityAccessory {...f.props} />);
+  try {
+    f.send(A, "failed", 1, "turn_started", { triggeringEventIds: [root] });
+    f.send(B, "stopped", 1, "turn_started", { triggeringEventIds: [root] });
+    f.send(A, "failed", 2, "turn_completed", { outcome: "failed" });
+    f.send(B, "stopped", 2, "turn_completed", { outcome: "cancelled" });
+    expect(screen.getByText("Couldn’t finish")).toBeInTheDocument();
+    expect(screen.getByText("Bubbles · Stopped")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /View agent activity: Blossom, failed/,
+      }),
+    );
+    expect(screen.getByText("Bubbles · Stopped")).toBeInTheDocument();
+    expect(
+      screen.getByText(/This request ended before it could finish/),
+    ).toBeInTheDocument();
+  } finally {
+    view.unmount();
+    f.dispose();
+  }
+});
+it.each([
+  ["failed", "Couldn’t finish"],
+  ["terminated", "Couldn’t finish"],
+  ["cancelled", "Stopped"],
+])(
+  "shows remote %s after stale activity and raw-buffer eviction",
+  (outcome, label) => {
+    const f = fixture();
+    const view = render(<ActivityAccessory {...f.props} />);
+    try {
+      f.send(A, "remote", 1, "turn_started", { triggeringEventIds: [root] });
+      act(() => vi.advanceTimersByTime(31000));
+      expect(screen.getByText("Status unavailable")).toBeInTheDocument();
+      f.send(A, "remote", 2, "turn_completed", { outcome });
+      expect(screen.getByText(new RegExp(label))).toBeInTheDocument();
+      for (let seq = 1; seq <= 201; seq++)
+        f.send(B, "unrelated", seq, "acp_read");
+      expect(screen.queryByText("Status unavailable")).not.toBeInTheDocument();
+      expect(screen.getByText(new RegExp(label))).toBeInTheDocument();
+      if (outcome !== "cancelled") {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: /View agent activity: Blossom, failed/,
+          }),
+        );
+        expect(
+          screen.getByText(/This request ended before it could finish/),
+        ).toBeInTheDocument();
+        expect(
+          screen.queryByRole("button", { name: "View activity for Blossom" }),
+        ).not.toBeInTheDocument();
+        expect(
+          screen.queryByRole("button", { name: /Dismiss error/ }),
+        ).not.toBeInTheDocument();
+      }
+    } finally {
+      view.unmount();
+      f.dispose();
+    }
+  },
+);
+it.each(["payload", "prompt"])(
+  "keeps %s thread scope through partial and full raw-record eviction",
+  (scope) => {
+    const f = fixture();
+    const view = render(<ActivityAccessory {...f.props} />);
+    try {
+      f.send(A, "thread", 1, "turn_started", {
+        triggeringEventIds: [root],
+        ...(scope === "payload" ? { threadRootEventId: root } : {}),
+      });
+      f.send(A, "thread", 2, "acp_write", {
+        method: "session/prompt",
+        params: {
+          prompt: [
+            {
+              type: "text",
+              text: `<context>\nScope: thread\nThread root: ${root}\n</context>`,
+            },
+          ],
+        },
+      });
+      expect(
+        screen.queryByRole("button", { name: /View agent activity/ }),
+      ).not.toBeInTheDocument();
+      for (let seq = 1; seq <= 150; seq++)
+        f.send(B, "unrelated", seq, "acp_read");
+      f.send(A, "thread", 3, "acp_read");
+      for (let seq = 151; seq <= 201; seq++)
+        f.send(B, "unrelated", seq, "acp_read");
+      expect(
+        screen.queryByRole("button", { name: /View agent activity/ }),
+      ).not.toBeInTheDocument();
+      for (let seq = 202; seq <= 402; seq++)
+        f.send(B, "unrelated", seq, "acp_read");
+      expect(
+        screen.queryByRole("button", { name: /View agent activity/ }),
+      ).not.toBeInTheDocument();
+      view.rerender(<ActivityAccessory {...f.props} messageLayout="thread" />);
+      expect(
+        screen.getByRole("button", { name: /View agent activity: Blossom/ }),
+      ).toBeInTheDocument();
+    } finally {
+      view.unmount();
+      f.dispose();
+    }
+  },
+);
 it("keeps namesakes as separate exact identities", () => {
   const f = fixture();
   f.profiles.set(B, { name: "Blossom", isAgent: true as const });
@@ -259,11 +369,6 @@ it("previews only live scoped actions and retains profile navigation", () => {
     expect(
       screen.queryByText("Private sibling thought"),
     ).not.toBeInTheDocument();
-    act(() => vi.advanceTimersByTime(31000));
-    expect(
-      screen.getByText("Activity interrupted or out of date"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Current thought")).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "View activity for Blossom" }),
     );
@@ -271,6 +376,17 @@ it("previews only live scoped actions and retains profile navigation", () => {
     expect(f.props.open).toHaveBeenCalledExactlyOnceWith(activity);
     // It asks that Activity for this message's transcript, once.
     expect(claimProfileTranscript(activity)).toBeDefined();
+    act(() => vi.advanceTimersByTime(31000));
+    fireEvent.click(
+      screen.getByRole("button", { name: /View agent activity/ }),
+    );
+    expect(
+      screen.getByText(/Buzz couldn’t confirm whether this request finished/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Current thought")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "View activity for Blossom" }),
+    ).not.toBeInTheDocument();
   } finally {
     view.unmount();
     f.dispose();
@@ -442,9 +558,12 @@ it("shows local receipt and failure without requiring an ACP transcript, and ope
     expect(bubble).toHaveTextContent("Reading notes.txt");
     expect(bubble.querySelector('[data-state="working"]')).toBeNull();
     act(() => work.finish({ ok: false, error: "Provider unavailable" }));
-    expect(bubble).toHaveTextContent("1 failed");
-    expect(bubble.querySelector("[data-state]")).toBeNull();
-    fireEvent.click(bubble);
+    expect(screen.getByText("Couldn’t finish")).toBeInTheDocument();
+    const details = screen.getByRole("button", {
+      name: /View agent activity: Blossom/,
+    });
+    expect(details.querySelector("[data-state]")).toBeNull();
+    fireEvent.click(details);
     expect(screen.getByText("Provider unavailable")).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "View activity for Blossom" }),
@@ -814,8 +933,113 @@ it("moves a stopped note below the agent's latest public reply", async () => {
     await act(() => f.props.session.agentActivity.interrupt(A, "c", root));
     expect(screen.getByTestId("request")).toBeEmptyDOMElement();
     expect(
-      within(screen.getByTestId("reply")).getByText("Blossom · Stopped"),
+      within(screen.getByTestId("reply")).getByText("Stopped"),
     ).toBeInTheDocument();
+  } finally {
+    view.unmount();
+    f.dispose();
+  }
+});
+it.each(["failed", "terminated", "unknown"])(
+  "places a remote %s caption beneath its reply without repeating the agent identity",
+  (outcome) => {
+    const f = fixture();
+    const reply = {
+      ...f.props.message,
+      id: next,
+      authorId: A,
+      createdAt: 2,
+      content: "An agent reply",
+    };
+    const view = render(
+      <>
+        <div data-testid="request">
+          <ActivityAccessory
+            {...f.props}
+            messageLayout="thread"
+            repliedAgents={[A]}
+          />
+        </div>
+        <div data-testid="reply">
+          <ActivityAccessory
+            {...f.props}
+            message={reply}
+            messageLayout="thread"
+            stoppedRequest={f.props.message}
+          />
+        </div>
+      </>,
+    );
+    try {
+      f.send(A, "remote", 1, "turn_started", { triggeringEventIds: [root] });
+      expect(
+        within(screen.getByTestId("request")).getByRole("button", {
+          name: /View agent activity/,
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("reply")).toBeEmptyDOMElement();
+      if (outcome === "unknown") act(() => vi.advanceTimersByTime(31000));
+      else f.send(A, "remote", 2, "turn_completed", { outcome });
+      expect(screen.getByTestId("request")).toBeEmptyDOMElement();
+      const caption = within(screen.getByTestId("reply"));
+      expect(
+        caption.getByText(
+          outcome === "unknown" ? "Status unavailable" : "Couldn’t finish",
+        ),
+      ).toBeInTheDocument();
+      expect(caption.queryByText("Blossom")).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("reply").querySelector("[data-avatar-stack]"),
+      ).toBeNull();
+      fireEvent.click(
+        caption.getByRole("button", { name: /View agent activity/ }),
+      );
+      expect(
+        screen.getByRole("dialog", { name: "Agent activity" }),
+      ).toHaveTextContent(
+        outcome === "unknown"
+          ? "Buzz couldn’t confirm"
+          : "This request ended before it could finish",
+      );
+      expect(f.props.open).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      f.dispose();
+    }
+  },
+);
+it("does not duplicate a replied thread failure on its channel request", () => {
+  const f = fixture();
+  const view = render(
+    <>
+      <div data-testid="request">
+        <ActivityAccessory
+          {...f.props}
+          message={{ ...f.props.message, replyCount: 1 }}
+          messageLayout="timeline"
+          repliedAgents={[A]}
+          representedAgents={[A]}
+        />
+      </div>
+      <div data-testid="sibling">
+        <ActivityAccessory
+          {...f.props}
+          message={{ ...f.props.message, id: next }}
+          messageLayout="timeline"
+        />
+      </div>
+    </>,
+  );
+  try {
+    f.send(A, "thread", 1, "turn_started", {
+      triggeringEventIds: [root],
+      threadRootEventId: root,
+    });
+    expect(screen.getByTestId("request")).toBeEmptyDOMElement();
+    f.send(A, "thread", 2, "turn_completed", { outcome: "terminated" });
+    expect(screen.getByTestId("request")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("sibling")).toBeEmptyDOMElement();
+    expect(f.props.open).not.toHaveBeenCalled();
   } finally {
     view.unmount();
     f.dispose();
@@ -870,7 +1094,7 @@ it.each(["thread", "continuation"] as const)(
       await act(() => f.props.session.agentActivity.interrupt(A, "c", root));
       expect(screen.getByTestId("request")).toBeEmptyDOMElement();
       expect(
-        within(screen.getByTestId("reply")).getByText("Blossom · Stopped"),
+        within(screen.getByTestId("reply")).getByText("Stopped"),
       ).toBeInTheDocument();
     } finally {
       view.unmount();
@@ -1283,9 +1507,7 @@ it("offers no Stop for a hosted agent that is not interruptible, or whose activi
     view.rerender(<ActivityAccessory {...f.props} agents={agents} />);
     expect(stopButton()).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(31000));
-    expect(
-      screen.getByText("Activity interrupted or out of date"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Status unavailable")).toBeInTheDocument();
     expect(stopButton()).not.toBeInTheDocument();
   } finally {
     view.unmount();

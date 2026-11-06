@@ -138,6 +138,31 @@ function fakeActivity(overrides: Partial<Snapshot> = {}) {
   return { activity, update };
 }
 
+it.each([
+  ["ended", "Completed"],
+  ["error", "Failed"],
+  ["stopped", "Stopped"],
+] as const)(
+  "shows readback outcome %s without inventing a terminal frame",
+  (outcome, label) => {
+    const { activity } = fakeActivity({
+      records: [record("t1", "Partial response")],
+      turns: [
+        {
+          agent: pubkey,
+          turnId: "t1",
+          channelId: "alpha",
+          timestamp: Date.now(),
+          state: "ended",
+          outcome,
+        },
+      ],
+    });
+    render(<ActivityPanel agent={agent} activity={activity} />);
+    expect(screen.getByText(label, { exact: true })).toBeVisible();
+    expect(screen.getByText("Partial response")).toBeVisible();
+  },
+);
 it("shows this agent's published turns, leaving the feed's lease to the plugin", () => {
   const { activity } = fakeActivity({
     records: [

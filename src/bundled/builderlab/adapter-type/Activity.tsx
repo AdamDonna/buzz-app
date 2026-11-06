@@ -8,7 +8,10 @@ import {
 import { useRelayConnection } from "../../../features/relay/react";
 import type { RelayData } from "../../../features/relay/service";
 import type { RelaySession } from "../../../features/relay/session";
-import { activityTranscript } from "../../../features/agents/activity-transcript";
+import {
+  activityTranscript,
+  type TranscriptTurn,
+} from "../../../features/agents/activity-transcript";
 import { ActivityTranscript } from "../../../features/agents/ActivityTranscript";
 import type { Agent, AgentViewProps } from "../../../features/agents/service";
 import { SettingsSectionLink } from "../../../features/navigation/SettingsSectionLink";
@@ -92,15 +95,23 @@ function ActivityFeed({
     activity.snapshot,
     activity.snapshot,
   );
-  const transcript = useMemo(
-    () =>
-      activityTranscript(
-        snapshot.records.filter((record) => record.agent === agent.pubkey),
-        { agent: agent.pubkey },
-        (pubkey) => resolve(pubkey, "") || undefined,
-      ),
-    [snapshot.records, agent.pubkey, resolve],
-  );
+  const transcript = useMemo(() => {
+    const transcript = activityTranscript(
+      snapshot.records.filter((record) => record.agent === agent.pubkey),
+      { agent: agent.pubkey },
+      (pubkey) => resolve(pubkey, "") || undefined,
+    );
+    return {
+      turns: transcript.turns.map((turn): TranscriptTurn => {
+        const retained = snapshot.turns.find(
+          (row) => row.agent === agent.pubkey && row.turnId === turn.turnId,
+        );
+        return retained?.outcome
+          ? { ...turn, outcome: retained.outcome }
+          : turn;
+      }),
+    };
+  }, [snapshot.records, snapshot.turns, agent.pubkey, resolve]);
   if (snapshot.status === "unavailable") return <Note>{UNAVAILABLE}</Note>;
   if (snapshot.status === "disabled")
     return (

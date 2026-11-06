@@ -198,11 +198,19 @@ function Turn({
   useClockFormat();
   const status = turn.error
     ? "Error"
-    : state === "working"
-      ? "Working"
-      : turn.endedAt
-        ? "Completed"
-        : "Status unknown";
+    : turn.outcome === "error"
+      ? "Failed"
+      : turn.outcome === "stopped"
+        ? "Stopped"
+        : turn.outcome === "unknown"
+          ? "Status unknown"
+          : turn.outcome === "ended"
+            ? "Completed"
+            : state === "working"
+              ? "Working"
+              : turn.endedAt
+                ? "Completed"
+                : "Status unknown";
   const { channelId, threadRootId } = turn;
   // An unknown thread is not opened as its channel.
   const open =
@@ -237,7 +245,11 @@ function Turn({
             {" · "}
           </>
         )}
-        <span data-state={turn.error ? "error" : state}>{status}</span>
+        <span
+          data-state={turn.error || turn.outcome === "error" ? "error" : state}
+        >
+          {status}
+        </span>
         {!!turn.endedAt && (
           <span> · {duration(turn.endedAt - turn.startedAt)}</span>
         )}

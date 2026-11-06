@@ -410,6 +410,9 @@ test("message activity opens a grouped preview and the agent's profile without l
   const resumedAt = await page.evaluate(() => Math.floor(Date.now() / 1000));
   publish(keys[0], 20002, "", typingTags, resumedAt);
   publish(keys[1], 20002, "", typingTags, resumedAt);
+  // Typing does not renew exact request work after the geometry checks let it expire.
+  telemetryTime = await page.evaluate(() => new Date().toISOString());
+  send(0, "turn_liveness", 4);
   await expect(threadIndicator).toHaveCount(1);
   // The tab title may be the loaded message preview, not literally "Thread".
   await page
@@ -499,7 +502,7 @@ test("message activity opens a grouped preview and the agent's profile without l
   await page.setViewportSize({ width: 1440, height: 950 });
   await row.getByRole("button", { name: /^View thread:/ }).click();
   telemetryTime = await page.evaluate(() => new Date().toISOString());
-  send(0, "turn_completed", 4);
+  send(0, "turn_completed", 5);
   // Public replies do not complete work: both the thread and channel retain
   // the remaining agent's request activity until its lifecycle finishes.
   await expect(region.locator(".buzz-avatar")).toHaveCount(1);

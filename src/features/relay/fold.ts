@@ -452,6 +452,15 @@ export function foldMessages(
         ...(projected.content !== content ? { sourceContent: content } : {}),
         ...(event.kind === 40002 ? { agentEnvelope: true as const } : {}),
         ...(agentAudience(event) ? { audience: "agents" as const } : {}),
+        ...(event.kind === 9 &&
+        event.tags.some(
+          (tag) =>
+            tag.length === 2 &&
+            tag[0] === "buzz:notice" &&
+            tag[1] === "execution-failure",
+        )
+          ? { notice: "execution-failure" as const }
+          : {}),
         ...(pluginRequest ? { pluginRequest: { id: pluginRequest } } : {}),
         ...(event.kind === 40008
           ? {

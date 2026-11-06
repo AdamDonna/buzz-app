@@ -51,7 +51,7 @@ it("associates activity only with the exact triggering message and channel", () 
     messageActivity({ ...source, records: [] }, "channel", request),
   ).toEqual([]);
 });
-it("stops animation on interrupted or stale evidence and removes settled work", () => {
+it("stops animation on interrupted or stale evidence, retires success and retains failure", () => {
   const source = fixture();
   expect(messageActivity(source, "channel", request)[0]?.working).toBe(true);
   expect(
@@ -83,7 +83,12 @@ it("stops animation on interrupted or stale evidence and removes settled work", 
         },
       ],
     };
-    expect(messageActivity(ended, "channel", request)).toEqual([]);
+    if (kind === "turn_completed")
+      expect(messageActivity(ended, "channel", request)).toEqual([]);
+    else
+      expect(messageActivity(ended, "channel", request)[0]?.state).toBe(
+        "error",
+      );
   }
 });
 it("never uses typing as message association or resurrects an ended request", () => {

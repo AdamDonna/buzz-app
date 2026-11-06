@@ -134,6 +134,8 @@ export type ChannelMessage = Readonly<{
   /** Signed `audience` tag of the original event: `agents` is coordination
    * between agents, shown quietly. Absent means everyone; unknown values too. */
   audience?: "agents";
+  /** Signed display metadata for an automatic execution-failure reply. */
+  notice?: "execution-failure";
   /** Original kind 40008. Untrusted display metadata; content stays a raw patch. */
   diff?: Readonly<{
     filePath?: string | undefined;

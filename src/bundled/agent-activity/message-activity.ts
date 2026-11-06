@@ -9,7 +9,7 @@ const live = ({ state, lifecycle, dismissed }: RequestWork) =>
       state !== "superseded" &&
       state !== "stopped" &&
       !dismissed
-    : state === "working" || state === "unknown";
+    : state === "working" || state === "unknown" || state === "error";
 
 /** Message and thread displays project the same request status. Pulses alone
  * cannot establish which individual message triggered work. */
@@ -23,8 +23,6 @@ export function messageWork(...args: Parameters<typeof requestWork>) {
   const work = requestWork(...args);
   return {
     live: work.filter(live),
-    stopped: work.filter(
-      ({ state, lifecycle }) => lifecycle && state === "stopped",
-    ),
+    stopped: work.filter(({ state }) => state === "stopped"),
   };
 }

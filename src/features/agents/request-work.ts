@@ -38,6 +38,13 @@ export function requestWork(
       .filter((record) => record.channelIds.includes(channelId))
       .map((record) => record.agent),
     ...requests.map((request) => request.agent),
+    ...snapshot.turns
+      .filter(
+        (turn) =>
+          turn.channelId === channelId &&
+          turn.triggeringEventIds?.some((id) => ids.has(id)),
+      )
+      .map((turn) => turn.agent),
   ]);
   return [...agents].sort().flatMap<RequestWork>((agent) => {
     const local = requests.filter((entry) => entry.agent === agent);
@@ -69,8 +76,15 @@ export function requestWork(
         },
       ];
     }
-    const selected = requestActivity(records, agent, channelId, messageId);
+    const selected = requestActivity(
+      records,
+      agent,
+      channelId,
+      messageId,
+      snapshot.turns,
+    );
     if (!selected.turnIds.size) return [];
+    if (snapshot.turnsTrimmed) selected.uncertain = true;
     const turns = snapshot.turns.filter(
       (turn) =>
         turn.agent === agent &&

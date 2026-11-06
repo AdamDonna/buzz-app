@@ -1257,6 +1257,26 @@ beyond 30 seconds or disconnect makes work unknown, not stopped. Terminal state
 retains a monotonic evidence timestamp through clock rollback and bounded eviction.
 There is no agent-global sequence gate: producer sequences reset, skip and interleave.
 
+Remote terminal outcomes map `completed` to success, `failed`/`terminated` to
+failure, and `cancelled` to stopped without identifying who cancelled. Exact
+trigger IDs and outcomes survive raw-record trimming. Losing a lifecycle turn
+makes aggregate request completion uncertain.
+
+With Builderlab sign-in, stale activity or reconnect triggers an owner-only
+`/v3/beekeeper/get-agent-turn-status` read for retained exact tasks. Reads batch
+up to 64 tasks per agent/session/channel using existing bounded retries. Missing
+or nonterminal tasks stay unknown and are checked again with jittered backoff:
+the first delay is 15–30 seconds, doubling to a five-minute ceiling. One timeout
+serves retained unknown tasks; completed tasks do not keep polling. A missing
+session or an agent outside the owner's inventory is skipped until reconnect.
+An exhausted transient read failure uses the same delayed retry for its batch;
+other sessions can continue recovering. Permanent read failures skip that batch
+until reconnect rather than stopping all recovery.
+Account/community changes, disable/reset and disposal cancel recovery; readback
+cannot replace a received terminal result. Recovery neither archives raw activity
+nor restores history after reload. Older servers without the endpoint leave
+tasks unknown.
+
 ### Activity updates in the conversation
 
 Conversation visibility is separate from execution status. Activity updates use

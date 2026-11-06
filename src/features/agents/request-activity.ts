@@ -1,5 +1,6 @@
 import type { ActivityTurn } from "./activity";
 import { activityRecords, type ActivityRecord } from "./activity-records";
+import { terminalOutcome } from "./observer";
 
 type Parsed = Readonly<{
   record: ActivityRecord;
@@ -8,7 +9,7 @@ type Parsed = Readonly<{
     turnId: string;
     seq: number;
     timestamp?: unknown;
-    payload?: { triggeringEventIds?: unknown };
+    payload?: { triggeringEventIds?: unknown; outcome?: unknown };
   };
 }>;
 // Snapshot record arrays are immutable and every mounted message row asks about
@@ -82,11 +83,15 @@ export function requestActivity(
   agent: string,
   channelId: string,
   requestId: string | readonly string[],
+  turns: readonly ActivityTurn[] = [],
 ) {
   const parsed = parseRecords(records, agent, channelId);
   const turnIds = new Set<string>();
   const selected: ActivityRecord[] = [];
-  const terminal = new Map<string, "ended" | "error">();
+  const terminal = new Map<
+    string,
+    NonNullable<ReturnType<typeof terminalOutcome>>
+  >();
   let uncertain = false;
   const result = () => ({ records: selected, turnIds, terminal, uncertain });
   const triggersWanted = new Set(
@@ -95,6 +100,16 @@ export function requestActivity(
     ),
   );
   if (!triggersWanted.size) return result();
+  const ambiguous = new Set(
+    turns
+      .filter(
+        (turn) =>
+          turn.agent === agent &&
+          turn.channelId === channelId &&
+          turn.ambiguous,
+      )
+      .map((turn) => turn.turnId),
+  );
   for (const start of parsed.filter(
     ({ value }) => value.kind === "turn_started",
   )) {
@@ -104,6 +119,10 @@ export function requestActivity(
       !triggers.some((id) => triggersWanted.has(id))
     )
       continue;
+    if (ambiguous.has(start.value.turnId)) {
+      uncertain = true;
+      continue;
+    }
     const turn = parsed.filter(
       ({ value }) => value.turnId === start.value.turnId,
     );
@@ -147,26 +166,41 @@ export function requestActivity(
     if (end && end.value.seq >= start.value.seq)
       terminal.set(
         start.value.turnId,
-        end.value.kind === "turn_completed" ? "ended" : "error",
+        terminalOutcome(end.value.kind, end.value.payload?.outcome) ??
+          "unknown",
       );
+  }
+  // The lifecycle owns bounded request associations and the first terminal
+  // receipt. Raw-buffer eviction must not erase either fact.
+  for (const turn of turns) {
+    if (
+      turn.agent !== agent ||
+      turn.ambiguous ||
+      turn.channelId !== channelId ||
+      !turn.triggeringEventIds?.some((id) => triggersWanted.has(id))
+    )
+      continue;
+    turnIds.add(turn.turnId);
+    if (turn.outcome) terminal.set(turn.turnId, turn.outcome);
   }
   return result();
 }
 
 /** Already scoped lifecycle evidence, never a claim that a reply was delivered.
  * Working dominates; all linked turns must agree before an aggregate end label.
- * Any feed trimming can have erased another linked start; do not claim completeness. */
+ * Retained request associations survive raw feed trimming. */
 export function requestActivityState(
   selected: ReturnType<typeof requestActivity>,
   turns: readonly ActivityTurn[],
   trimmed = 0,
-): "waiting" | "working" | "unknown" | "ended" | "error" {
+): "waiting" | "working" | "unknown" | "ended" | "error" | "stopped" {
   const linked = [...selected.turnIds].map((id) =>
     turns.find((turn) => turn.turnId === id),
   );
   if (linked.some((turn) => turn?.state === "working")) return "working";
   if (
-    trimmed > 0 ||
+    (trimmed > 0 &&
+      (!linked.length || !linked.every((turn) => turn?.triggeringEventIds))) ||
     selected.uncertain ||
     linked.some((turn) => !turn || turn.state === "unknown")
   )
@@ -178,5 +212,8 @@ export function requestActivityState(
     )
   )
     return "unknown";
-  return [...selected.terminal.values()].includes("error") ? "error" : "ended";
+  const outcomes = [...selected.terminal.values()];
+  if (outcomes.includes("unknown")) return "unknown";
+  if (outcomes.includes("error")) return "error";
+  return outcomes.includes("stopped") ? "stopped" : "ended";
 }

@@ -61,6 +61,88 @@ const row: ChannelMessage = {
   replyCount: 23,
 };
 
+it("discloses an automatic failure reply while keeping its original text available", () => {
+  const content =
+    "Sorry, I couldn’t complete this request. Please try again in a new thread, or try a different model.";
+  const props = {
+    row: { ...row, content, notice: "execution-failure" as const },
+    profile: { name: "Spongebob", isAgent: true as const },
+    media: () => undefined,
+    onOpenLink: () => false,
+    day: false,
+    retry: undefined,
+  };
+  try {
+    const view = renderDom(<MessageRow {...props} />);
+    const details = screen.getByRole("button", {
+      name: "Spongebob: Couldn’t finish · Details",
+    });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(content)).not.toBeInTheDocument();
+    fireEvent.click(details);
+    expect(screen.getByText(content)).toBeVisible();
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    expect(details).toHaveAccessibleName(
+      "Spongebob: Couldn’t finish · Hide details",
+    );
+    fireEvent.click(details);
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    view.rerender(
+      <MessageRow
+        {...props}
+        row={{
+          ...props.row,
+          edited: true,
+          content: "Here is the useful result.",
+        }}
+      />,
+    );
+    expect(screen.getByText("Here is the useful result.")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /Couldn’t finish · Details/ }),
+    ).not.toBeInTheDocument();
+    view.rerender(<MessageRow {...props} row={{ ...row, content }} />);
+    expect(screen.getByText(content)).toBeVisible();
+  } finally {
+    cleanup();
+  }
+});
+
+it("aligns a failure caption with its request rather than the agent author", () => {
+  const request = { ...row, id: "request", authorId: "viewer" };
+  const props = {
+    row: { ...row, notice: "execution-failure" as const },
+    stoppedRequest: request,
+    viewer: "viewer",
+    profile: { name: "Spongebob", isAgent: true as const },
+    media: () => undefined,
+    onOpenLink: () => false,
+    day: false,
+    retry: undefined,
+  };
+  try {
+    const view = renderDom(<MessageRow {...props} />);
+    const caption = () =>
+      screen
+        .getByRole("button", {
+          name: "Spongebob: Couldn’t finish · Details",
+        })
+        .closest("[data-message-notice]");
+    expect(caption()).toHaveAttribute("data-viewer-message");
+    view.rerender(
+      <MessageRow
+        {...props}
+        stoppedRequest={{ ...request, authorId: "another-human" }}
+      />,
+    );
+    expect(caption()).not.toHaveAttribute("data-viewer-message");
+    view.rerender(<MessageRow {...props} stoppedRequest={undefined} />);
+    expect(caption()).not.toHaveAttribute("data-viewer-message");
+  } finally {
+    cleanup();
+  }
+});
+
 it.each([false, true])(
   "previews human and agent identities and preserves avatar navigation: %s",
   async (agentEnvelope) => {

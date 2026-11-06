@@ -49,6 +49,30 @@ const update = (sessionUpdate: string, fields: object) => ({
   method: "session/update",
   params: { sessionId: "S", update: { sessionUpdate, ...fields } },
 });
+
+it.each([
+  [undefined, "ended"],
+  ["completed", "ended"],
+  ["failed", "error"],
+  ["terminated", "error"],
+  ["cancelled", "stopped"],
+  ["new-outcome", "unknown"],
+])(
+  "projects remote terminal outcome %s without reporting success",
+  (outcome, expected) => {
+    const transcript = activityTranscript(
+      [
+        record([
+          event("remote", "turn_started"),
+          event("remote", "turn_completed", { outcome }),
+        ]),
+      ],
+      { agent },
+    );
+    expect(transcript.turns[0]?.outcome).toBe(expected);
+    expect(transcript.turns[0]?.endedAt).toBeDefined();
+  },
+);
 const prompt = (id: number, context: string, content: string) => ({
   jsonrpc: "2.0",
   id,

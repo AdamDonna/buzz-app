@@ -159,6 +159,14 @@ it("does not let ambiguous duplicate starts produce a thread animation absent fr
   f.send("turn_started");
   expect(f.bubble()).toEqual([]);
   expect(f.thread()).toEqual([]);
+  // Evict the first start, then both: retained associations must not revive it.
+  for (let i = 0; i < 199; i++) f.send("acp_read", "other", sibling);
+  expect(f.bubble()).toEqual([]);
+  expect(f.thread()).toEqual([]);
+  f.send("acp_read", "other", sibling);
+  f.send("turn_completed");
+  expect(f.bubble()).toEqual([]);
+  expect(f.thread()).toEqual([]);
   f.activity.dispose();
 });
 it("keeps the public indicator when the activity plugin is unavailable", () => {

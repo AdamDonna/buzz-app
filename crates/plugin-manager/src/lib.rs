@@ -381,6 +381,7 @@ const BUILDERLAB_FI_ROUTES: &[&str] = &[
     "v3/beekeeper/list-agents",
     "v3/beekeeper/get-model-catalog",
     "v3/beekeeper/cancel-agent-turn",
+    "v3/beekeeper/get-agent-turn-status",
     "GET v1/auth/me",
     "v1/buzz/nostr-identities/current",
     "v1/buzz/nostr-identities/delete",
@@ -2501,6 +2502,7 @@ mod tests {
                 .collect();
             assert!(operations.contains(&format!("GET {base}v1/auth/me")));
             assert!(operations.contains(&format!("POST {base}v3/beekeeper/register-agent")));
+            assert!(operations.contains(&format!("POST {base}v3/beekeeper/get-agent-turn-status")));
             assert!(operations.contains(&format!("POST {base}v1/buzz/nsec-backups/status")));
             assert_eq!(operations.len(), super::BUILDERLAB_FI_ROUTES.len());
         }
