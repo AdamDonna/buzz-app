@@ -38,7 +38,7 @@ import {
   windowFilter,
   type WindowCursor,
 } from "./window";
-import { ByteLru, byteSize, listByteSize } from "./budget";
+import { ByteLru, byteSize, listByteSize, PROFILE_CACHE_BASE } from "./budget";
 import type { HeadPersistence, SavedHead } from "./persistence";
 import { createMediaPreparation, saveData } from "./media";
 import { relayDebug } from "./debug";
@@ -290,6 +290,9 @@ export function createChannelStore(
   let disposed = false,
     epoch = 0,
     listBusy = false;
+  // Full cache clears. Profiles outlive access purges (which move `epoch`),
+  // so only a clear or disposal fences a profile restore.
+  let cleared = 0;
   let listAgain = false;
   // Epoch of the latest access revocation. When that revocation is what made a
   // full read stale, it interrupted rather than failed it: a pass is still owed.
@@ -352,10 +355,14 @@ export function createChannelStore(
   });
   let startup: Promise<void> | undefined;
   let discoveryObserved = false;
-  // Profile bursts rewrite the whole startup record; save at most once per 500ms.
+  // Catch-up bursts rewrite the whole startup record; save at most once per 500ms.
   let discoverySave: ReturnType<typeof setTimeout> | undefined;
-  // Participant profiles in the last startup snapshot, by identity.
-  let savedProfiles: ReadonlyMap<string, RelayEvent | undefined> = new Map();
+  // Directory bursts rewrite the whole profile mirror; save at most once per second.
+  let profileSave: ReturnType<typeof setTimeout> | undefined;
+  // Never mirror before restore has read the saved profiles.
+  let profilesRestored = false;
+  // Event ids last written to the mirror; undefined when the disk copy is unknown.
+  let mirrored: string | undefined;
   let preparing = false;
   let warming = false;
   const notify = (listeners: Iterable<Listener> | undefined) => {
@@ -434,6 +441,10 @@ export function createChannelStore(
       ...next,
       channels: sameChannels ? list.channels : Object.freeze(channels),
     });
+    if (!sameChannels)
+      directory.protect(
+        list.channels.flatMap((channel) => channel.participants ?? []),
+      );
     notify(listListeners);
   }
   /** A head read replaces a detached segment: its rows and floor go with it.
@@ -1277,34 +1288,80 @@ export function createChannelStore(
     discoverySave = undefined;
     if (!persistence?.writeStartup || !discovery || !transport || disposed)
       return;
-    savedProfiles = new Map(
-      [
-        ...new Set(
-          discovery
-            .channels()
-            .filter((channel) => !channel.cached)
-            .flatMap((channel) => channel.participants ?? []),
-        ),
-      ]
-        .slice(0, 1024)
-        .map((id) => [id, directory.event(id)]),
-    );
     void persistence
       .writeStartup({
         discovery: {
           savedAt: now(),
           relayAuthor: transport.relayAuthor,
           events: discovery.savedEvents(),
-          profiles: [...savedProfiles.values()].filter(
-            (event) => event !== undefined,
-          ),
         },
       })
       .catch(() => {});
   }
+  /** Mirror the most recently used profiles so the next session starts with
+   * their names. Like the directory, only a full cache clear empties it. */
+  function saveProfiles() {
+    clearTimeout(profileSave);
+    profileSave = undefined;
+    if (!persistence?.writeProfiles || !profilesRestored || disposed) return;
+    const events = directory.recent(PROFILE_CACHE_BASE);
+    const signature = events.map((event) => event.id).join(":");
+    if (signature === mirrored) return;
+    mirrored = signature;
+    void persistence.writeProfiles(events).catch(() => {
+      mirrored = undefined;
+    });
+  }
+  /** Show the saved names at once, then reread them in the background: the
+   * newer kind 0 wins, and the directory change saves it back. */
+  async function restoreProfiles() {
+    const generation = cleared;
+    let saved: unknown[] | undefined;
+    try {
+      saved = await persistence?.readProfiles?.();
+    } catch {
+      // An unreadable copy may still be good: never overwrite it this session.
+      return;
+    }
+    try {
+      if (!Array.isArray(saved) || saved.length > PROFILE_CACHE_BASE) return;
+      const profiles: RelayEvent[] = [];
+      for (let index = 0; index < saved.length; index += 12) {
+        for (const value of saved.slice(index, index + 12)) {
+          try {
+            const event = eventDto(JSON.parse(JSON.stringify(value)));
+            if (event.kind === 0) profiles.push(event);
+          } catch {
+            /* One bad record cannot discard the other names. */
+          }
+        }
+        await yieldToHost();
+        if (disposed || generation !== cleared) return;
+      }
+      directory.accept(profiles);
+      if (!options.cachedOnly && profiles.length)
+        void directory
+          .ensure(
+            profiles.map((event) => event.pubkey),
+            "background",
+            true,
+          )
+          .catch(() => {});
+    } catch {
+      // A corrupt copy never blocks fresh reads; the next save replaces it.
+    } finally {
+      // After a clear the disk copy is gone, so saving the directory is right.
+      if (!disposed) {
+        profilesRestored = true;
+        saveProfiles();
+      }
+    }
+  }
   async function restoreStartup() {
     if (!persistence?.readStartup || !transport || !discovery) return;
     const generation = epoch;
+    // Names do not depend on the saved roster: restore them alongside it.
+    const profiles = restoreProfiles();
     try {
       const saved = (await persistence.readStartup())?.discovery;
       if (
@@ -1327,33 +1384,13 @@ export function createChannelStore(
         await yieldToHost();
         if (disposed || generation !== epoch || discoveryObserved) return;
       }
-      const profiles: RelayEvent[] = [];
-      if (Array.isArray(saved.profiles) && saved.profiles.length <= 1024) {
-        for (let index = 0; index < saved.profiles.length; index += 12) {
-          for (const value of saved.profiles.slice(index, index + 12)) {
-            try {
-              profiles.push(eventDto(JSON.parse(JSON.stringify(value))));
-            } catch {
-              /* A bad optional label cannot discard valid conversation history. */
-            }
-          }
-          await yieldToHost();
-          if (disposed || generation !== epoch || discoveryObserved) return;
-        }
-      }
       if (disposed || generation !== epoch || discoveryObserved) return;
       applyDiscovery(events, undefined, undefined, true);
-      const participants = new Set(
-        discovery.channels().flatMap((channel) => channel.participants ?? []),
-      );
-      directory.accept(
-        profiles.filter(
-          (event) => event.kind === 0 && participants.has(event.pubkey),
-        ),
-      );
       await (options.initialChannelId ? initialHydration : hydration);
     } catch {
       // Missing, corrupt or unavailable device storage never blocks fresh reads.
+    } finally {
+      await profiles;
     }
   }
   // Background reads deduplicate metadata versions; strong resolution revisits proof.
@@ -1930,6 +1967,9 @@ export function createChannelStore(
           tails.clear();
           clearTimeout(discoverySave);
           discoverySave = undefined;
+          // The kept directory is saved again after the clear.
+          mirrored = undefined;
+          profileSave ??= setTimeout(saveProfiles, 1000);
           void persistence?.clear().catch(() => {});
           setList({
             status: "error",
@@ -2952,6 +2992,7 @@ export function createChannelStore(
   }
   async function clearCache() {
     epoch++;
+    cleared++;
     creationReads.clear();
     hydration = undefined;
     revealHydration?.();
@@ -2974,6 +3015,9 @@ export function createChannelStore(
     resetReferences();
     clearTimeout(discoverySave);
     discoverySave = undefined;
+    clearTimeout(profileSave);
+    profileSave = undefined;
+    mirrored = undefined;
     await persistence?.clear().catch(() => {});
   }
   /** One background head read at a time; warm never competes with demand reads
@@ -3604,13 +3648,7 @@ export function createChannelStore(
     }
     for (const state of windows.values()) setWindow(state, {});
     setList(list);
-    // Only a saved participant's profile changes the startup snapshot.
-    if (
-      discoveryObserved &&
-      !discoverySave &&
-      [...savedProfiles].some(([id, event]) => directory.event(id) !== event)
-    )
-      discoverySave = setTimeout(saveDiscovery, 500);
+    profileSave ??= setTimeout(saveProfiles, 1000);
   });
   const unsubscribeLocal = local?.subscribe(() => {
     if (disposed) return;
@@ -3898,6 +3936,7 @@ export function createChannelStore(
   function dispose() {
     disposed = true;
     clearTimeout(discoverySave);
+    clearTimeout(profileSave);
     if (referenceWake) clearTimeout(referenceWake.timer);
     referenceWake = undefined;
     unsubscribeLocal?.();

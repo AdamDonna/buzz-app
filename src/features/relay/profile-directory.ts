@@ -97,7 +97,14 @@ export function createProfileDirectory(
   },
 ) {
   let limit = PROFILE_CACHE_BASE;
-  const events = new ByteLru<RelayEvent>(limit, limit * PROFILE_ENTRY_BYTES);
+  // DM partners: eviction takes them last, so a large roster cannot turn a
+  // DM label back into a key. Bounded to half the base entry count.
+  let kept: ReadonlySet<string> = new Set();
+  const events = new ByteLru<RelayEvent>(
+    limit,
+    limit * PROFILE_ENTRY_BYTES,
+    (id) => kept.has(id),
+  );
   // One entry per open view; the largest sets the limit.
   const reservations = new Set<{ members: number }>();
   let shrinking: ReturnType<typeof setTimeout> | undefined;
@@ -586,6 +593,24 @@ export function createProfileDirectory(
       return ensure(ids, "background", true);
     },
     event: (id: string) => events.peek(id),
+    /** Keep these identities' profiles through eviction. */
+    protect(ids: Iterable<string>) {
+      kept = new Set([...ids].slice(0, PROFILE_CACHE_BASE / 2));
+    },
+    /** Up to `count` held kind 0 events, least valued first: protected
+     * identities last, the rest by least recent use. */
+    recent: (count: number) => {
+      const ids = events.keys();
+      return [
+        ...ids.filter((id) => !kept.has(id)),
+        ...ids.filter((id) => kept.has(id)),
+      ]
+        .slice(-count)
+        .flatMap((id) => {
+          const event = events.peek(id);
+          return event ? [event] : [];
+        });
+    },
     stats: () => events.stats(),
     dispose() {
       closed = true;

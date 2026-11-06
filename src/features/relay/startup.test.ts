@@ -52,10 +52,15 @@ function disk() {
       profiles: [],
     },
   ];
+  let profiles: unknown[] = [];
   const storage: HeadPersistence = {
     readStartup: vi.fn(async () => structuredClone(startup)),
     writeStartup: vi.fn(async (patch) => {
       startup = { ...startup, ...structuredClone(patch) };
+    }),
+    readProfiles: vi.fn(async () => structuredClone(profiles)),
+    writeProfiles: vi.fn(async (events) => {
+      profiles = structuredClone([...events]);
     }),
     read: vi.fn(async () => structuredClone(heads)),
     write: vi.fn(async (value) => {
@@ -70,6 +75,7 @@ function disk() {
     clear: vi.fn(async () => {
       startup = undefined;
       heads = [];
+      profiles = [];
     }),
     close: vi.fn(),
   };
@@ -371,10 +377,12 @@ describe("device-local startup", () => {
           savedAt: Date.now(),
           relayAuthor: relay.pubkey,
           events: [...alpha, ...beta],
-          profiles: [profile(participant, { name: "Alpha-only participant" })],
         },
         preferences: { savedAt: Date.now(), data: layout },
       });
+      await storage.writeProfiles?.([
+        profile(participant, { name: "Alpha-only participant" }),
+      ]);
       const { owner, channels, membership, query } = setup(storage);
       await owner.restore();
       expect(
@@ -403,12 +411,12 @@ describe("device-local startup", () => {
       expect((await storage.readStartup?.())?.preferences?.data).toEqual(
         layout,
       );
-      expect((await storage.readStartup?.())?.discovery?.profiles).toEqual([]);
       const next = setup(storage, true);
       await next.owner.restore();
+      // A profile is a global relay event; losing a channel does not drop it.
       expect(
-        next.owner.session.profiles.snapshot().has(participant.pubkey),
-      ).toBe(false);
+        next.owner.session.profiles.snapshot().get(participant.pubkey)?.name,
+      ).toBe("Alpha-only participant");
       expect(
         next.channels.list().channels.map((channel) => channel.id),
       ).toEqual(["beta"]);
@@ -418,6 +426,74 @@ describe("device-local startup", () => {
       expect(next.channels.window("alpha").rows).toEqual([]);
     },
   );
+
+  it("restores names a previous session loaded", async () => {
+    const storage = disk();
+    const stranger = keypair();
+    const first = setup(storage);
+    await first.owner.restore();
+    const reply = first.query.getMockImplementation();
+    first.query.mockImplementation(async (filters) =>
+      filters.some((filter) => filter.kinds?.includes(0))
+        ? [profile(stranger, { name: "Stranger" })]
+        : (reply?.(filters) ?? []),
+    );
+    await first.owner.session.profiles.ensure([stranger.pubkey]);
+    await vi.waitFor(
+      async () => expect(await storage.readProfiles?.()).toHaveLength(1),
+      { timeout: 3000 },
+    );
+    const next = setup(storage, true);
+    await next.owner.restore();
+    expect(
+      next.owner.session.profiles.snapshot().get(stranger.pubkey)?.name,
+    ).toBe("Stranger");
+  });
+
+  it("restores a multi-batch mirror when the shorter roster restores first", async () => {
+    const storage = disk();
+    const people = Array.from({ length: 60 }, (_, index) =>
+      profile(keypair(), { name: `Saved ${index}` }),
+    );
+    await storage.writeProfiles?.(people);
+    const { owner } = setup(storage, true);
+    await owner.restore();
+    const snapshot = owner.session.profiles.snapshot();
+    for (const [index, event] of people.entries())
+      expect(snapshot.get(event.pubkey)?.name).toBe(`Saved ${index}`);
+    expect(await storage.readProfiles?.()).toHaveLength(60);
+  });
+
+  it("rereads restored names and saves a newer profile", async () => {
+    const storage = disk();
+    const stranger = keypair();
+    await storage.writeProfiles?.([profile(stranger, { name: "Old" })]);
+    const { owner, query } = setup(storage);
+    const reply = query.getMockImplementation();
+    const renamed = deferred<RelayEvent[]>();
+    query.mockImplementation(async (filters) =>
+      filters.some((filter) => filter.authors?.includes(stranger.pubkey))
+        ? renamed.promise
+        : (reply?.(filters) ?? []),
+    );
+    await owner.restore();
+    expect(owner.session.profiles.snapshot().get(stranger.pubkey)?.name).toBe(
+      "Old",
+    );
+    renamed.resolve([profile(stranger, { name: "New" }, 1_700_000_001)]);
+    await vi.waitFor(() =>
+      expect(owner.session.profiles.snapshot().get(stranger.pubkey)?.name).toBe(
+        "New",
+      ),
+    );
+    await vi.waitFor(
+      async () =>
+        expect(await storage.readProfiles?.()).toEqual([
+          expect.objectContaining({ created_at: 1_700_000_001 }),
+        ]),
+      { timeout: 3000 },
+    );
+  });
 
   it("reveals the selected head before verifying unrelated history", async () => {
     const storage = disk();
