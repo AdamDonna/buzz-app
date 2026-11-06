@@ -56,6 +56,14 @@ the interface unless an available tool actually supports that action.
 - The **public key** identifies someone and is safe to share. The **private
   key**, shown as an `nsec`, lets someone act as that identity. Never ask anyone
   to paste a private key into a conversation or send it to you.
+- In native desktop builds, **Settings → Buzz → Identity → Authorize external identity** creates an
+  ownership proof for an application such as Nexus that holds its own agent key.
+  Enter that application's public key in hex, select **Authorize identity**,
+  review the exact identity and permission in the confirmation, then select
+  **Authorize this key** and copy the proof into its owner attestation field.
+  This lets the key direct your Buzz coding agents to run commands as you.
+  Authorize only keys you recognize: the proof has no time or event-kind limits. Your private key stays
+  in Buzz. This does not join the agent to a community or sign it in to an organization.
 - **Settings → Buzz → Identity → Copy private key** lets someone make their own
   backup, for example in a password manager. They should handle it privately.
   When Builderlab backup is on, the same page shows the account's linked key

@@ -1,5 +1,28 @@
 # Packaged human identity and relay access
 
+## Authorize an external agent identity
+
+Settings → Buzz → Identity → Authorize external identity accepts an application's
+existing public key as 64 hexadecimal characters. An explicit **Authorize
+identity** action opens a confirmation showing the exact npub and explaining
+that the key can direct the owner's coding agents to run commands as them.
+Only **Authorize this key** calls the existing `prepareRemoteAgentAuthorization` host
+wrapper and `identity_prepare_remote_agent_authorization` native signer. It
+returns a NIP-OA `auth` tag with empty conditions, bound to exactly that agent key
+and the current human owner. No key is exported, agent created, membership
+changed, or organization session obtained. This proof has no time or event-kind
+limits; the form says so before signing. The human copies it to the requesting
+application's owner-attestation field.
+
+The form never signs on mount or input changes. It rejects self and malformed
+keys, holds the input during signing, checks the returned owner against the
+displayed owner, and aborts preparation when settings unmount. Switching owners
+remounts an empty form. Proofs stay only in component state until explicitly
+copied; input changes clear the prior proof. This section requires a native
+desktop identity. A debug build signs as its separate debug identity, not
+the installed application's owner. This screen does not expand external-app MCP
+scopes or grant remote callers access to signing.
+
 Native macOS, Windows and Linux without the live development broker open on a
 welcome screen when no human key exists on this device: **Buzz** — "Your people,
 your agents, your projects — all in one place." — with **Sign in with Builderlab**
