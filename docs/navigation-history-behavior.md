@@ -22,6 +22,15 @@ Back/Forward returns a thread to where the reader left it in this window; only
 a fresh opening, or a return to a place no longer loaded, reveals a linked
 message again. If the channel's latest messages were evicted meanwhile, the
 thread can briefly show its end before it returns to that place.
+The same rule covers message links that open in the channel timeline rather
+than in a thread: Back/Forward returns the timeline to where the reader left
+it, whether it comes from another channel or from another link in the same
+channel. Following the link again, Retry and opening the visit already shown
+are fresh openings and reveal the message. The place Back returns to is also
+where a later plain visit to that channel opens, with one exception: if a
+reveal left the reader less than 80 px from the end, Back keeps the message
+where the reveal placed it, but a plain visit opens at the latest message, as
+it does after the reader scrolls that close to the end.
 
 Profiles and GitHub use the same rule. Their read-only target and optional
 thread context are carried as `detail` in the scoped conversation address;
@@ -95,8 +104,9 @@ across refresh is separate from this behavior.
 ## Evidence boundaries
 
 Colocated tests cover driver traversal, inactive dismissal, cold targets, verified
-thread roots and navigation-attempt lifetime. The browser regression file proves
-actual popstate/hashchange traversal, X and two-tab behavior in the production
-components with the existing disposable relay fixture. It does not establish
+thread roots and navigation-attempt lifetime. The browser regression files prove
+actual popstate/hashchange traversal, X and two-tab behavior, and the reading
+place of linked threads and channel timelines, in the production components
+with the existing disposable relay fixture. They do not establish
 native desktop acceptance. Manual comparison and acceptance steps are recorded
 in the pull request description.
