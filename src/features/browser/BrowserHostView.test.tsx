@@ -49,6 +49,7 @@ function fakePlatform(): BrowserPlatform {
       error: null,
     })),
     detach: vi.fn(async () => {}),
+    openExternal: vi.fn(async () => {}),
   };
 }
 
@@ -737,6 +738,58 @@ it("shows a refused app as a page in the website's place, with no reason", async
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+it("offers Try again and the system browser when Builderlab can't be reached", async () => {
+  const platform = fakePlatform();
+  const user = userEvent.setup();
+  vi.mocked(platform.attach)
+    .mockRejectedValueOnce(
+      new BrowserAttachError(
+        "Builderlab sign-in request failed",
+        "unavailable",
+      ),
+    )
+    .mockResolvedValueOnce("session-1");
+  vi.mocked(platform.openExternal)
+    .mockRejectedValueOnce(new Error("no browser"))
+    .mockResolvedValueOnce(undefined);
+  render(
+    <BrowserHostView
+      url="https://example.com/app"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Buzz couldn’t load this app");
+  expect(alert).not.toHaveTextContent("sign-in request failed");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+
+  await user.click(screen.getByRole("button", { name: "Open in browser" }));
+  expect(platform.openExternal).toHaveBeenCalledWith("https://example.com/app");
+  expect(
+    await screen.findByText(
+      "Couldn’t open it in your browser. Try again in a moment.",
+    ),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Open in browser" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByText(
+        "Couldn’t open it in your browser. Try again in a moment.",
+      ),
+    ).not.toBeInTheDocument(),
+  );
+  expect(platform.attach).toHaveBeenCalledTimes(1);
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(platform.status).toHaveBeenCalledWith("session-1"),
+  );
+  expect(platform.attach).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("keeps Try again focused while a refused app retries", async () => {
   const platform = fakePlatform();
   const user = userEvent.setup();
@@ -793,6 +846,56 @@ it("keeps Try again focused while a refused app retries", async () => {
   await user.keyboard("{Enter}");
   await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(4));
   expect(retry).toHaveFocus();
+  await act(async () => settle.resolve("session-1"));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+});
+
+it("keeps Try again focused while an unreachable Builderlab retries", async () => {
+  const platform = fakePlatform();
+  const user = userEvent.setup();
+  const unreachable = () =>
+    new BrowserAttachError("Builderlab sign-in request failed", "unavailable");
+  let settle: { resolve(id: string): void; reject(error: unknown): void } = {
+    resolve: () => {},
+    reject: () => {},
+  };
+  const deferred = () =>
+    new Promise<string>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+  vi.mocked(platform.attach)
+    .mockRejectedValueOnce(unreachable())
+    .mockImplementationOnce(deferred)
+    .mockImplementationOnce(deferred);
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  retry.focus();
+
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(2));
+  expect(retry).toHaveFocus();
+  expect(retry).toHaveAttribute("aria-busy", "true");
+  expect(
+    screen.getByRole("button", { name: "Open in browser" }),
+  ).toBeInTheDocument();
+  await user.keyboard("{Enter}");
+  expect(platform.attach).toHaveBeenCalledTimes(2);
+
+  await act(async () => settle.reject(unreachable()));
+  expect(retry).toHaveFocus();
+  expect(retry).not.toHaveAttribute("aria-busy");
+
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(3));
   await act(async () => settle.resolve("session-1"));
   await waitFor(() =>
     expect(screen.queryByRole("alert")).not.toBeInTheDocument(),

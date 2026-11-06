@@ -566,6 +566,7 @@ it("moving the last side app adopts its guest before the dock exit finishes", as
     available: true,
     attach: attached,
     detach: detached,
+    openExternal: vi.fn(async () => {}),
     setBounds: async () => {},
     navigate: async (id, url) => {
       pages.set(id, url);

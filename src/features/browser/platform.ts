@@ -84,10 +84,12 @@ export interface BrowserPlatform {
   action(sessionId: string, action: BrowserAction): Promise<void>;
   status(sessionId: string): Promise<BrowserStatus>;
   detach(sessionId: string): Promise<void>;
+  /** Opens `url` in the system browser, outside Buzz. */
+  openExternal(url: string): Promise<void>;
 }
 
 /** A page the browser view shows in place of the website when attach fails. */
-export type BrowserViewerPage = "denied";
+export type BrowserViewerPage = "denied" | "unavailable";
 
 /** An attach failure. `page` names a panel page to show instead of the error bar. */
 export class BrowserAttachError extends Error {
@@ -100,7 +102,7 @@ export class BrowserAttachError extends Error {
   }
 }
 
-const VIEWER_PAGES: readonly string[] = ["denied"];
+const VIEWER_PAGES: readonly string[] = ["denied", "unavailable"];
 
 // Native attach rejects with `{ message, page? }`; older paths reject with a string.
 function attachError(error: unknown): unknown {
@@ -181,5 +183,7 @@ export function createBrowserPlatform(): BrowserPlatform {
     status: (sessionId) =>
       invoke<BrowserStatus>("browser_status", { sessionId }),
     detach: (sessionId) => invoke("browser_detach", { sessionId }),
+    openExternal: async (url) =>
+      invoke("plugin:opener|open_url", { url: normalizedUrl(url) }),
   };
 }

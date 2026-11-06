@@ -20,6 +20,7 @@ function platform(): BrowserPlatform {
     action: vi.fn(),
     status: vi.fn(),
     detach: vi.fn(async () => {}),
+    openExternal: vi.fn(async () => {}),
   };
 }
 

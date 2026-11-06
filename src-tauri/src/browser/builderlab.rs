@@ -64,7 +64,18 @@ pub enum ViewerPage {
     /// Kgoose refused this viewer. Like its own page, give no reason: an
     /// unknown or deleted app looks the same as one without access.
     Denied,
+    /// The exchange could not be reached or failed on its side; trying again,
+    /// or opening the app in the system browser, may work.
+    Unavailable,
 }
+
+fn unavailable(message: &str) -> ViewerError {
+    ViewerError {
+        message: message.into(),
+        page: Some(ViewerPage::Unavailable),
+    }
+}
+
 impl From<String> for ViewerError {
     fn from(message: String) -> Self {
         Self {
@@ -183,11 +194,11 @@ fn exchange_available(status: reqwest::StatusCode, federated: bool) -> Result<bo
     Err(match status.as_u16() {
         401 if federated => {
             "Sign in again in Settings → Identity → Organization sign-in, then reopen this app"
+                .into()
         }
-        401 => "Sign out and sign in to Builderlab again in Settings, then reopen this app",
-        _ => "Builderlab viewer sign-in is unavailable. Try reopening this app",
-    }
-    .into())
+        401 => "Sign out and sign in to Builderlab again in Settings, then reopen this app".into(),
+        _ => unavailable("Builderlab viewer sign-in is unavailable. Try reopening this app"),
+    })
 }
 
 /// The exchange endpoint and the header authorizing it. A federated token is
@@ -275,7 +286,7 @@ pub(super) async fn prepare(
         .body(body.to_string())
         .send()
         .await
-        .map_err(|_| "Builderlab sign-in request failed")?;
+        .map_err(|_| unavailable("Builderlab sign-in request failed"))?;
     // The refusal shows now; the session route answers in the background.
     tokio::spawn(recheck_refused_session(
         response.status(),
@@ -289,10 +300,10 @@ pub(super) async fn prepare(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| "Invalid Builderlab sign-in response")?
+        .map_err(|_| unavailable("Invalid Builderlab sign-in response"))?
     {
         if bytes.len() + chunk.len() > 4096 {
-            return Err("Invalid Builderlab sign-in response".into());
+            return Err(unavailable("Invalid Builderlab sign-in response"));
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -301,8 +312,8 @@ pub(super) async fn prepare(
         credential: String,
         expires_at: String,
     }
-    let reply: Reply =
-        serde_json::from_slice(&bytes).map_err(|_| "Invalid Builderlab sign-in response")?;
+    let reply: Reply = serde_json::from_slice(&bytes)
+        .map_err(|_| unavailable("Invalid Builderlab sign-in response"))?;
     let viewer_credential = Zeroizing::new(reply.credential);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -444,16 +455,17 @@ mod tests {
     }
 
     #[test]
-    fn only_a_viewer_refusal_gets_the_denied_page_without_a_reason() {
+    fn refusals_and_outages_name_their_panel_pages() {
         for federated in [false, true] {
             for code in [400, 401, 403, 429, 500, 503, 302] {
                 let status = reqwest::StatusCode::from_u16(code).unwrap();
                 let error = exchange_available(status, federated).unwrap_err();
-                assert_eq!(
-                    error.page,
-                    (code == 403).then_some(ViewerPage::Denied),
-                    "{code}"
-                );
+                let page = match code {
+                    403 => Some(ViewerPage::Denied),
+                    401 => None,
+                    _ => Some(ViewerPage::Unavailable),
+                };
+                assert_eq!(error.page, page, "{code}");
             }
         }
         let denied = exchange_available(reqwest::StatusCode::FORBIDDEN, true).unwrap_err();
@@ -465,10 +477,18 @@ mod tests {
             })
         );
         // Other failures carry only their message.
-        let other = ViewerError::from("Builderlab sign-in request failed");
+        let outage = exchange_available(reqwest::StatusCode::BAD_GATEWAY, true).unwrap_err();
+        assert_eq!(
+            serde_json::to_value(&outage).unwrap(),
+            serde_json::json!({
+                "message": "Builderlab viewer sign-in is unavailable. Try reopening this app",
+                "page": "unavailable",
+            })
+        );
+        let other = ViewerError::from("Invalid Builderlab viewer credential");
         assert_eq!(
             serde_json::to_value(&other).unwrap(),
-            serde_json::json!({ "message": "Builderlab sign-in request failed" })
+            serde_json::json!({ "message": "Invalid Builderlab viewer credential" })
         );
     }
 

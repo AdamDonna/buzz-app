@@ -229,6 +229,12 @@ describe("createBrowserPlatform", () => {
     expect(plain).toBeInstanceOf(BrowserAttachError);
     expect((plain as BrowserAttachError).page).toBeUndefined();
 
+    const outage = await attach({
+      message: "Builderlab sign-in request failed",
+      page: "unavailable",
+    }).catch((error: unknown) => error);
+    expect((outage as BrowserAttachError).page).toBe("unavailable");
+
     const unknownPage = await attach({ message: "x", page: "elsewhere" }).catch(
       (error: unknown) => error,
     );
@@ -237,6 +243,17 @@ describe("createBrowserPlatform", () => {
     await expect(attach("Browser session is closed")).rejects.toBe(
       "Browser session is closed",
     );
+  });
+
+  it("opens only a valid HTTP(S) URL in the system browser", async () => {
+    const platform = createBrowserPlatform();
+    await platform.openExternal("https://example.com/app?x=1");
+    expect(sdk.invoke).toHaveBeenCalledWith("plugin:opener|open_url", {
+      url: "https://example.com/app?x=1",
+    });
+    sdk.invoke.mockClear();
+    await expect(platform.openExternal("file:///etc/passwd")).rejects.toThrow();
+    expect(sdk.invoke).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid URL before native invocation", async () => {
