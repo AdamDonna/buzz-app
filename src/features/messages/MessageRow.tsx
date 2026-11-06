@@ -54,6 +54,7 @@ import {
   type ReactNode,
   type ReactElement,
   type RefObject,
+  type SyntheticEvent,
 } from "react";
 import { useListedChannel } from "../relay/listed-channel";
 import type { RelaySession } from "../relay/session";
@@ -427,8 +428,31 @@ function MessageRowContent({
   useEffect(() => {
     if (openAction && !opened) setOpenAction(undefined);
   }, [openAction, opened]);
-  const keepAlive = reporting !== undefined || !!opened;
-  // The dialog, pending submit and notice live in this row; eviction loses them.
+  // Media events from attachment players, plugin ones included, reach the
+  // attachment list through React, but only players inside its DOM count: a
+  // plugin player portalled elsewhere never pins the row. load() and src swaps
+  // pause with only an emptied event.
+  const [mediaPlaying, setMediaPlaying] = useState(false);
+  const trackMedia = (event: SyntheticEvent<HTMLDivElement>) =>
+    setMediaPlaying(playingIn(event.currentTarget));
+  // React drops the pause a player fires once removed. While one plays,
+  // recheck when the list's tree changes: a player edited out, claimed by a
+  // message renderer or swapped by its plugin's boundary. Whatever unmounts
+  // the list itself (a claim of its last group, an agents row folding) clears
+  // the flag. A stable ref, so re-renders never detach it.
+  const observeAttachments = useCallback((list: HTMLDivElement) => {
+    const observer = new MutationObserver(() =>
+      setMediaPlaying((playing) => playing && playingIn(list)),
+    );
+    observer.observe(list, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      setMediaPlaying(false);
+    };
+  }, []);
+  const keepAlive = reporting !== undefined || !!opened || mediaPlaying;
+  // The dialog, pending submit, notice and playing media live in this row;
+  // eviction loses them.
   useEffect(() => {
     const release = keepAlive ? keepMounted?.(row.id) : undefined;
     // Dialog focus restoration runs in a microtask after unmount; releasing a
@@ -1239,6 +1263,12 @@ function MessageRowContent({
                 <div
                   className={styles.messageAttachments}
                   data-message-attachments
+                  ref={observeAttachments}
+                  onPlay={trackMedia}
+                  onPause={trackMedia}
+                  onEnded={trackMedia}
+                  onEmptied={trackMedia}
+                  onError={trackMedia}
                 >
                   {attachmentGroups.map((group) => {
                     const images =
@@ -1790,6 +1820,11 @@ const noSubscribe = () => () => {};
 const none: readonly never[] = [];
 const noActions = () => none;
 const noLibrary = () => undefined;
+// A failed player can still report paused false.
+const playingIn = (list: Element) =>
+  [...list.querySelectorAll<HTMLMediaElement>("audio, video")].some(
+    (player) => !player.paused && !player.error,
+  );
 // Confirmed lifecycle evidence wins; legacy agents retain public typing fallback.
 // A joined-key snapshot keeps unrelated typing from re-rendering the row. Like
 // the sidebar, only the viewer's own agents count: the library is read while
