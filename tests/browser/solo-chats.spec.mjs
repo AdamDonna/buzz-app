@@ -386,6 +386,15 @@ test("Share opens View only and posts a link without promoting or moving the Sol
     exact: true,
   });
   await expect(share).toBeEnabled();
+  // Channel results can render before the people search and the access check
+  // settle. Their results then change the height above Share, which can move
+  // Share after focus has revealed it.
+  await expect(
+    dialog.getByRole("status").filter({ hasText: "Searching…" }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.getByText("Existing members keep their access.", { exact: true }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 850 });
   await page.evaluate(() =>
     document.documentElement.style.setProperty("--buzz-text-scale", "2"),
