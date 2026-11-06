@@ -181,7 +181,10 @@ test.extend({ companionFixture: true })(
     await expect(companion).toBeVisible();
     for (const target of [
       composer,
-      main.getByRole("tab", { selected: true }),
+      main.getByRole("button", {
+        name: "Manage members of Alpha",
+        exact: true,
+      }),
     ]) {
       await expect
         .poll(() =>
@@ -234,7 +237,12 @@ test.extend({ companionFixture: true })(
         await tab.click();
         // The PC binding cycles: start in main so its next destination is side.
         if (!keys.apple)
-          await main.getByRole("tab", { selected: true }).focus();
+          await main
+            .getByRole("button", {
+              name: "Manage members of Alpha",
+              exact: true,
+            })
+            .focus();
         await expect(page.locator("html")).not.toHaveAttribute(
           "data-keyboard-navigation",
           "",
@@ -366,7 +374,10 @@ test("covered panes and notifications preserve focus and F6 recovery", async ({
   await expect.poll(toastCoversComposer).toBe(true);
   // WebKit can retain horizontal shell scroll after resizing. An offscreen
   // main tab must not make that covered pane eligible for focus recovery.
-  const mainTab = main.getByRole("tab", { name: "Alpha", exact: true });
+  const mainTab = main.getByRole("button", {
+    name: "Manage members of Alpha",
+    exact: true,
+  });
   await mainTab.evaluate((tab) => {
     const bounds = tab.getBoundingClientRect();
     const shell = tab.closest("[data-shell-tone]");

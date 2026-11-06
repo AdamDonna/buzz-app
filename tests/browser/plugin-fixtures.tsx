@@ -313,7 +313,9 @@ export const fixturePlugins: readonly BundledPlugin[] = [
                     Target:{" "}
                     {target.kind === "page" ? target.pageId : target.kind}
                   </p>
-                  <button type="button">Fixture sidebar action</button>
+                  <button type="button" tabIndex={0}>
+                    Fixture sidebar action
+                  </button>
                   {children}
                 </aside>
               </div>

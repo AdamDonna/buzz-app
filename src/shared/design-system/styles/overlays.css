@@ -470,6 +470,7 @@
   .buzz-tooltip[data-ending-style] {
     transition-duration: var(--duration-fast);
   }
+  .buzz-tooltip[data-hint="dock"],
   .buzz-tooltip[data-instant],
   html[data-keyboard-navigation] .buzz-tooltip {
     transition: none;

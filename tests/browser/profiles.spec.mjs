@@ -14,9 +14,7 @@ test("qualifies a whitespace namesake in Members and opens its exact profile", a
     npub: window.profilesFixture.npubs.mic,
   }));
   const name = `Viewer (${key.slice(0, 10)})`;
-  await page
-    .getByRole("button", { name: "Manage members", exact: true })
-    .click();
+  await page.getByRole("button", { name: /^Manage members of / }).click();
   const dialog = page.getByRole("dialog", {
     name: "Manage members",
     exact: true,
@@ -297,7 +295,7 @@ test("profile visits survive passive traversal and X retires active and inactive
   // Members composes above a content visit without replacing that content.
   const reopened = (await read()).entry.id;
   await page
-    .getByRole("button", { name: "Manage members", exact: true })
+    .getByRole("button", { name: "Manage members of One", exact: true })
     .click();
   const members = page.getByRole("dialog", {
     name: "Manage members",
@@ -650,7 +648,7 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
   );
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   await expect(mention).toBeFocused();
@@ -728,7 +726,7 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
   );
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   await expect(
@@ -738,7 +736,7 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
   ).toBeFocused();
   await page
     .locator(
-      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "]',
     )
     .click();
   const missingKey = await page.evaluate(
@@ -862,7 +860,7 @@ test("contextual panel callbacks retire with opening, channel, contribution and 
   expect(await invoke()).toBe(false);
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   await capture();
@@ -945,7 +943,7 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
   const errors = watchPageErrors(page);
   await page.goto("/tests/fixtures/profiles.html");
   const members = page.getByRole("button", {
-    name: "Manage members",
+    name: "Manage members of One",
     exact: true,
   });
   await members.click();
@@ -1278,7 +1276,7 @@ test.describe("touch member actions", () => {
   test("keeps the ellipsis available without hover", async ({ page }) => {
     await page.goto("/tests/fixtures/profiles.html");
     const members = page.getByRole("button", {
-      name: "Manage members",
+      name: "Manage members of One",
       exact: true,
     });
     await members.tap();
@@ -1308,7 +1306,7 @@ test("member Send message navigates a human DM without sending or returning focu
   const errors = watchPageErrors(page);
   await page.goto("/tests/fixtures/profiles.html?member-message");
   await page
-    .getByRole("button", { name: "Manage members", exact: true })
+    .getByRole("button", { name: "Manage members of One", exact: true })
     .click();
   const dialog = page.getByRole("dialog", {
     name: "Manage members",
@@ -1333,13 +1331,13 @@ test("member Send message navigates a human DM without sending or returning focu
     .poll(() => page.evaluate(() => window.profilesFixture.dmOpens))
     .toEqual([[await page.evaluate(() => window.profilesFixture.keys.mic)]]);
   await expect(
-    page.getByRole("tab", { name: "Mic", exact: true }),
+    page.getByRole("button", { name: "Manage members of Mic", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("textbox", { name: "Message #Mic", exact: true }),
   ).toBeFocused();
   await expect(
-    page.getByRole("button", { name: "Manage members", exact: true }),
+    page.getByRole("button", { name: "Manage members of Mic", exact: true }),
   ).not.toBeFocused();
   expect(
     await page.evaluate(() => window.profilesFixture.report.publications),
@@ -1348,7 +1346,7 @@ test("member Send message navigates a human DM without sending or returning focu
   // the DM open or send.
   await page.evaluate(() => window.profilesFixture.navigation.back());
   await expect(
-    page.getByRole("button", { name: "Manage members", exact: true }),
+    page.getByRole("button", { name: "Manage members of One", exact: true }),
   ).toBeVisible();
   await expect(dialog).toHaveCount(0);
   expect(
@@ -1378,7 +1376,7 @@ test("profile preview stays inside a Solo conversation beside another pane", asy
   await page.goto("/tests/fixtures/profiles.html?solo");
   await page.getByRole("button", { name: "One", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "One", exact: true }),
+    page.getByRole("button", { name: "Share access to One", exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "View Viewer profile", exact: true })

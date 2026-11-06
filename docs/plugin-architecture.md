@@ -1231,15 +1231,16 @@ Stop painting while the document is hidden, and never flash more than three
 times in any one second (WCAG 2.3.1).
 
 The host keeps the shell usable over any backdrop. While one is present, each
-header control group and the sidebar resize grip keeps a solid `bg-app` floor,
-so controls, their state fills and focus rings stay on the background they were
-designed for. Panes stay opaque. When the user prefers reduced motion or reduced
+header control group and the app dock keep a solid `bg-app` floor, so controls,
+their state fills and focus rings stay on the background they were designed
+for. Panes stay opaque; the sidebar resize grip sits on the seam of the joined
+sidebar and conversation surface, so no backdrop reaches it. When the user prefers reduced motion or reduced
 transparency, or forced colors are active, the host does not mount backdrops at
 all, which also stops their animation; they return when the preference does.
 
 A backdrop that needs to stay clear of shell controls may read, but not style,
 these layout roles: `.shell-header` and its direct children (each a group of
-controls), `.shell-center-capsule` (centered pages; it moves into the header's
+controls), `.shell-side-dock` (the app dock), `.shell-center-capsule` (centered pages; it moves into the header's
 flow while `.shell-header` has `data-compact-pages`), `.shell-body`, and the
 outermost `.panel` elements inside it (nested panels are content). On macOS the
 native window controls sit in the header's leading inset, outside these roles.

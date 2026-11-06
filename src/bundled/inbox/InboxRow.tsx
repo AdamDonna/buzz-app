@@ -90,22 +90,24 @@ export function InboxRowButton({
       aria-label={`Open ${sender} in ${context}`}
       aria-describedby={previewId}
       icon={
-        <Avatar
-          size="default"
-          alt=""
-          fallback={sender}
-          fallbackContent={
-            item.workflowOwnerId ? <LightningIcon size={20} /> : undefined
-          }
-          src={
-            item.workflowOwnerId
-              ? undefined
-              : avatarMedia(profile?.picture, media)
-          }
-          shape={
-            item.workflowOwnerId || profile?.isAgent ? "squircle" : "circle"
-          }
-        />
+        <span className={styles.rowAvatar}>
+          <Avatar
+            size="fill"
+            alt=""
+            fallback={sender}
+            fallbackContent={
+              item.workflowOwnerId ? <LightningIcon size={20} /> : undefined
+            }
+            src={
+              item.workflowOwnerId
+                ? undefined
+                : avatarMedia(profile?.picture, media)
+            }
+            shape={
+              item.workflowOwnerId || profile?.isAgent ? "squircle" : "circle"
+            }
+          />
+        </span>
       }
       label={
         <span className={styles.content}>

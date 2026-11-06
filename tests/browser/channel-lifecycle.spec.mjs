@@ -105,7 +105,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
   await expect(dialog).toHaveCount(0);
   await expect(row).toBeFocused();
   expect(app.report.lifecyclePublications ?? []).toHaveLength(0);
-  await openPage(page, "Workflows");
+  await sidebar.getByRole("button", { name: "Beta", exact: true }).click();
   await row.click({ button: "right" });
   await menu
     .getByRole("menuitem", { name: "Archive channel", exact: true })
@@ -115,7 +115,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
   await expect(dialog).toHaveCount(0);
   await expect(row).toBeFocused();
   await expect(
-    page.getByRole("heading", { name: "Workflows", exact: true }),
+    page.getByRole("textbox", { name: "Message #Beta", exact: true }),
   ).toBeVisible();
   await row.click();
   await row.click({ button: "right" });
@@ -446,7 +446,7 @@ test.describe("Solo chat lifecycle", () => {
     });
     await expect(composer).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Share access", exact: true }),
+      page.getByRole("button", { name: /^Share access to /, exact: true }),
     ).toBeVisible();
     const url = page.url();
     await row.focus();
@@ -487,7 +487,7 @@ test.describe("Solo chat lifecycle", () => {
     ).toHaveText("This chat is archived");
     await expect(composer).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Share access", exact: true }),
+      page.getByRole("button", { name: /^Share access to /, exact: true }),
     ).toHaveCount(0);
     await page.reload();
     await expect(
@@ -538,7 +538,7 @@ test.describe("Solo chat lifecycle", () => {
     await expect(row).toBeVisible();
     await expect(composer).toBeEnabled();
     await expect(
-      page.getByRole("button", { name: "Share access", exact: true }),
+      page.getByRole("button", { name: /^Share access to /, exact: true }),
     ).toBeVisible();
     await expect(page).toHaveURL(url);
     await header.click();

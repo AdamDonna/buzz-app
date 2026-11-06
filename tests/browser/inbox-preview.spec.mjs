@@ -8,7 +8,7 @@ import {
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 
-// Browser-only contract: a real pointer resting on the sidebar row opens the
+// Browser-only contract: a real pointer resting on the dock tab opens the
 // card, which sits just past the row, and its row navigates without opening
 // Activity. Shell gating and the card's states stay in RTL tests.
 test.use({
@@ -20,7 +20,7 @@ test.use({
   historyCounts: { alpha: 2, beta: 1 },
 });
 
-test("hovering the sidebar Activity row previews recent conversations and opens one directly", async ({
+test("hovering the dock Activity tab previews recent conversations and opens one directly", async ({
   page,
   app,
 }, testInfo) => {
@@ -66,8 +66,11 @@ test("hovering the sidebar Activity row previews recent conversations and opens 
   app.relay.publish("primary", solo, { requireSubscriber: false });
   app.relay.publish("primary", shared, { requireSubscriber: false });
   await open(page, app);
-  const pages = page.getByRole("navigation", { name: "Pages", exact: true });
-  const inboxRow = pages.getByRole("button", { name: "Activity", exact: true });
+  const pages = page.getByRole("navigation", {
+    name: "Apps dock",
+    exact: true,
+  });
+  const inboxRow = pages.getByRole("tab", { name: "Activity", exact: true });
   const card = page.getByRole("dialog", { name: "Activity", exact: true });
   const rows = card.getByRole("list", { name: "Recent activity" });
   // Beside the row, inside the window, in both themes, at an intermediate
@@ -139,9 +142,10 @@ test("hovering the sidebar Activity row previews recent conversations and opens 
     if (width >= 1280) {
       const header = await card.locator("header").boundingBox();
       expect(Math.abs(box.x - (row.x + row.width + 6))).toBeLessThanOrEqual(1);
-      expect(
-        Math.abs(header.y + header.height - 1 - row.y),
-      ).toBeLessThanOrEqual(1);
+      // The first dock item can be too high for header-line alignment; the
+      // shared popup then keeps its 8px viewport gutter instead.
+      const alignedTop = row.y - (header.y - box.y) - header.height + 1;
+      expect(Math.abs(box.y - Math.max(8, alignedTop))).toBeLessThanOrEqual(1);
     } else
       expect(box.y >= row.y + row.height || box.x >= row.x + row.width).toBe(
         true,
@@ -199,18 +203,31 @@ test("hovering the sidebar Activity row previews recent conversations and opens 
   await expect(
     page.getByRole("region", { name: "Thread messages", exact: true }),
   ).toBeVisible();
-  await expect(inboxRow).not.toHaveAttribute("aria-current", "page");
+  await expect(inboxRow).toHaveAttribute("aria-selected", "false");
   await expect(
     page.getByRole("region", { name: "Activity", exact: true }),
   ).toHaveCount(0);
 
   // While Activity is the open page, its row offers no preview.
   await inboxRow.click();
-  await expect(inboxRow).toHaveAttribute("aria-current", "page");
+  await expect(inboxRow).toHaveAttribute("aria-selected", "true");
   await expect(inboxRow).not.toHaveAttribute("aria-haspopup");
   await expect(
     page
       .getByRole("region", { name: "Activity", exact: true })
       .getByRole("switch", { name: "Unread", exact: true }),
   ).not.toBeChecked();
+  // Selected dock items use the same instant right-side label as their peers.
+  await page.mouse.move(1200, 880);
+  await inboxRow.hover();
+  const hint = page.getByRole("tooltip", { name: "Activity", exact: true });
+  await expect(hint).toBeVisible();
+  const triggerBounds = await inboxRow.boundingBox();
+  const hintBounds = await hint.boundingBox();
+  expect(hintBounds.x).toBeGreaterThanOrEqual(
+    triggerBounds.x + triggerBounds.width,
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("selected-inbox-tooltip.png"),
+  });
 });

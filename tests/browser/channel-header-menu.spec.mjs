@@ -30,15 +30,18 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
   await page
     .locator('button[data-channel-id="11111111-1111-4111-8111-111111111111"]')
     .click();
-  // The header's single title tab fills the title slot: a long name truncates
-  // only when the header runs out of room, not at the tab strip's 12rem cap.
-  const heading = page.getByRole("tab", { name: channelName, exact: true });
+  // The header identity fills the title slot: a long name truncates only when
+  // the header runs out of room, not at the tab strip's 12rem cap.
+  const heading = page.getByRole("button", {
+    name: `Manage members of ${channelName}`,
+    exact: true,
+  });
   await expect(heading).toBeVisible();
   await expect
     .poll(
       () =>
         heading
-          .locator(".navigation-item-label")
+          .getByText(channelName, { exact: true })
           .evaluate((label) => label.scrollWidth <= label.clientWidth),
       "the header title shows the whole channel name",
     )
@@ -533,20 +536,32 @@ test.describe("dialog origin retirement", () => {
     await openPage(page, "Messages");
     await page.locator('button[data-channel-id="beta"]').click();
     await expect(
-      page.getByRole("tab", { name: "Beta", exact: true }),
+      page.getByRole("button", { name: "Manage members of Beta", exact: true }),
     ).toBeVisible();
     await page.locator(`button[data-channel-id="${channelId}"]`).click();
     await expect(
-      page.getByRole("tab", { name: channelName, exact: true }),
+      page.getByRole("button", {
+        name: `Manage members of ${channelName}`,
+        exact: true,
+      }),
     ).toBeVisible();
   }
   async function back(page) {
     await page.goBack();
+    // Sidebar-origin dialogs keep the workspace inert on Back; inspect its retained identity.
     await expect(
-      page.locator(
-        '[aria-label="Conversation"] [role="tab"][aria-selected="true"]',
-      ),
-    ).toHaveText("Beta");
+      page
+        .getByRole("article", {
+          name: "Conversation",
+          exact: true,
+          includeHidden: true,
+        })
+        .getByRole("button", {
+          name: "Manage members of Beta",
+          exact: true,
+          includeHidden: true,
+        }),
+    ).toBeVisible();
   }
   test("Canvas retires without reading the next channel or losing its original draft", async ({
     page,
@@ -582,7 +597,10 @@ test.describe("dialog origin retirement", () => {
     expect(canvasReads()).toEqual(before);
     await page.goForward();
     await expect(
-      page.getByRole("tab", { name: channelName, exact: true }),
+      page.getByRole("button", {
+        name: `Manage members of ${channelName}`,
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(canvas).toHaveCount(0);
     await page
@@ -636,7 +654,10 @@ test.describe("dialog origin retirement", () => {
           await expect(dialog).toHaveCount(0);
           await page.goForward();
           await expect(
-            page.getByRole("tab", { name: channelName, exact: true }),
+            page.getByRole("button", {
+              name: `Manage members of ${channelName}`,
+              exact: true,
+            }),
           ).toBeVisible();
           await expect(dialog).toHaveCount(0);
         } else {

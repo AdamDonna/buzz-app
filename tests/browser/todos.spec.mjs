@@ -74,7 +74,7 @@ test("opt-in Todos saves ordinary Canvas and disabling leaves it editable", asyn
     await expect(
       page
         .getByRole("article", { name: "Conversation" })
-        .getByRole("tab", { name: "Alpha", exact: true }),
+        .getByRole("button", { name: "Manage members of Alpha", exact: true }),
     ).toBeVisible();
   };
   await page.goto(app.origin);
@@ -258,14 +258,14 @@ test("opt-in Todos saves ordinary Canvas and disabling leaves it editable", asyn
     name: "Sidebar",
     exact: true,
   });
-  const pages = sidebar.getByRole("navigation", { name: "Pages" });
   for (const destination of ["Activity", "Bestie"]) {
-    await pages.getByRole("button", { name: destination, exact: true }).click();
+    await openPage(page, destination);
     await expect(
       page.getByRole("region", { name: destination, exact: true }),
     ).toBeVisible();
     await expect(drawer).toHaveCount(0);
     await expect(launcher).toHaveCount(0);
+    await openPage(page, "Messages");
     await sidebar.getByRole("button", { name: "Alpha", exact: true }).click();
     await expect(drawer).toHaveCount(0);
     await expect(launcher).toHaveAttribute("aria-expanded", "false");
@@ -319,13 +319,13 @@ test("opt-in Todos saves ordinary Canvas and disabling leaves it editable", asyn
   await expect(
     page
       .getByRole("article", { name: "Conversation" })
-      .getByRole("tab", { name: "Beta", exact: true }),
+      .getByRole("button", { name: "Manage members of Beta", exact: true }),
   ).toBeVisible();
   await sidebar.getByRole("button", { name: "Alpha", exact: true }).click();
   await expect(
     page
       .getByRole("article", { name: "Conversation" })
-      .getByRole("tab", { name: "Alpha", exact: true }),
+      .getByRole("button", { name: "Manage members of Alpha", exact: true }),
   ).toBeVisible();
   await plugins();
   await enabled.click();

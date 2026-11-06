@@ -410,19 +410,33 @@ that agent in Buzz; they do not notify the external app through this connection.
   and Linux) an HTTP(S) link in a message to open it in your default browser
   instead of a side panel. You can also right-click the link and choose
   **Open in browser**.
+- **Conversation members**: click the combined member avatars and conversation
+  name in the header to open membership management. Other header actions remain
+  on the right. Compact avatars sit before the name on the left; Solo chats show
+  the included agents.
+- **App navigation**: use the left dock to switch apps. Bestie is first,
+  Activity second, followed by the other apps. Community and profile controls
+  sit at the bottom of the dock. Search stays wide in the top bar.
+  Messages has All / Solo / Team sidebar filters; other apps use their main
+  view unless they provide their own sidebar. The sidebar and message pane
+  share one surface with a persistent divider; panel headers also have bottom
+  hairlines. Dock icons stay still, highlight on hover, and show instant labels
+  to their right. Bestie uses your configured avatar.
+  The **+** opens New from the sidebar. **Cmd/Ctrl+N** opens that menu where
+  the current app has a creation sidebar.
 - **Link boundaries**: a bare http(s) or buzz link ends at whitespace and at
   fullwidth, CJK or curly-quote punctuation such as `，`, `。`, `」` or `’`. In a
   host name, `。` works as a dot. Wrap it as `<url>` to keep them in it.
 - **Drafts & sent** lists the messages you started but did not send, newest
-  change first, with the number of drafts shown beside it in the sidebar, and
-  your latest 100 sent messages in this community, grouped by day. A sent
-  message shows who replied after you ("2 after you") or that you were last
-  ("You're last"); a channel post shows its reply count. Select a draft to
-  continue it in its conversation, or a sent message to jump to it. Search
-  matches the conversation name and what you wrote. It reads only this
+  change first, with the number of drafts shown beside it in the Messages
+  sidebar, and your latest 100 sent messages in this community, grouped by
+  day. A sent message shows who replied after you ("2 after you") or that you
+  were last ("You're last"); a channel post shows its reply count. Select a
+  draft to continue it in its conversation, or a sent message to jump to it.
+  Search matches the conversation name and what you wrote. It reads only this
   device's saved drafts and never changes them.
 - **Activity preview**: with a mouse or trackpad, rest the pointer on
-  **Activity** in the sidebar to see recent mentions, DMs, thread replies, and reactions
+  **Activity** in the app dock to see recent mentions, DMs, thread replies, and reactions
   without opening the Activity page. Clicking a conversation opens it directly;
   **Open Activity** opens the page. The card's **Unread only** switch is
   separate from the Activity page's filters and hides reactions when on. The preview is not shown on touch
@@ -548,8 +562,8 @@ available rather than silently discarding it.
   in new Solo chats for that community. It does not replace recipients in an
   existing chat or an edited draft. People can choose a different agent for a
   particular conversation. When the optional **Bestie** plugin is on, that saved
-  choice also opens the agent's DM from the left navigation; Messages omits the
-  duplicate row while it is pinned. Bestie uses the same conversation tabs as
+  choice also opens the agent's DM from the left Apps dock. The Messages
+  sidebar omits the duplicate Bestie row. Bestie uses the same conversation tabs as
   Messages: threads open beside the chat (or in the main pane, following your
   thread placement setting), and can be moved, renamed, or closed. Collapsing
   the side pane keeps its open threads and reply drafts.

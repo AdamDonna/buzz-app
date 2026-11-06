@@ -115,7 +115,7 @@ test("channel menu mute/read persist without selecting the row; failed mute rema
   ).toBeEnabled();
   await page.keyboard.press("Escape");
   await page.unroute("**/sidebar-mute");
-  // The persistent sidebar keeps retry UI and actions usable outside Messages.
+  // Session-owned retry UI remains usable while the sidebar is hidden.
   await openPage(page, "Workflows");
   await expect(
     page.getByRole("heading", { name: "Workflows", exact: true }),
@@ -124,6 +124,9 @@ test("channel menu mute/read persist without selecting the row; failed mute rema
   await failure.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(failure).toHaveCount(0);
   await expect(menu).toHaveCount(0);
+  await expect(beta).toBeHidden();
+  await openPage(page, "Messages");
+  await beta.focus();
   await expect(beta).toBeFocused();
   await expect(badge(beta)).toHaveCount(0);
   await expect(
@@ -152,10 +155,7 @@ test("channel menu mute/read persist without selecting the row; failed mute rema
     "aria-label",
     /^8 observed unread messages/,
   );
-  await expect(alpha).not.toHaveAttribute("aria-current", "page");
-  await expect(
-    page.getByRole("heading", { name: "Workflows", exact: true }),
-  ).toBeVisible();
+  await expect(alpha).toHaveAttribute("aria-current", "page");
   await expect
     .poll(
       () =>

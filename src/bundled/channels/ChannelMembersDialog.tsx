@@ -1,3 +1,4 @@
+import { ChannelHeaderIdentity, memberAccess } from "./ChannelHeaderIdentity";
 import {
   useVerifiedNames,
   withVerifiedNames,
@@ -419,10 +420,12 @@ export function ChannelMembersButton({
   signal,
   owner,
   label = "Access",
+  conversationName,
 }: {
   session: RelaySession;
   channelId: string;
   label?: string;
+  conversationName?: string;
   /** Someone else's Solo chat names its owner on the Access control. */
   owner?: { name: string; picture?: string | undefined } | undefined;
   agents?: Agents | undefined;
@@ -437,24 +440,45 @@ export function ChannelMembersButton({
   const open = presentation ? presentation.open : localOpen;
   const setOpen = presentation ? presentation.onOpenChange : setLocalOpen;
   const trigger = useRef<HTMLButtonElement>(null);
+  const list = useSyncExternalStore(
+    session.channels.subscribeList,
+    session.channels.list,
+    session.channels.list,
+  );
+  const channel =
+    list.channels.find((item) => item.id === channelId) ??
+    session.channels.get?.(channelId);
   return (
     <>
-      <IconButton
-        ref={trigger}
-        size="sm"
-        aria-label={owner ? `${label}, ${soloOwnerLabel(owner)}` : label}
-        title={owner ? soloOwnerLabel(owner) : label}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => setOpen(true)}
-        icon={
-          owner ? (
-            <SoloOwnerAvatar owner={owner} />
-          ) : (
-            <UsersIcon size="1rem" aria-hidden="true" />
-          )
-        }
-      />
+      {conversationName !== undefined ? (
+        <ChannelHeaderIdentity
+          ref={trigger}
+          session={session}
+          channelId={channelId}
+          name={conversationName}
+          access={memberAccess(channel)}
+          detail={owner && soloOwnerLabel(owner)}
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+        />
+      ) : (
+        <IconButton
+          ref={trigger}
+          size="sm"
+          aria-label={owner ? `${label}, ${soloOwnerLabel(owner)}` : label}
+          title={owner ? soloOwnerLabel(owner) : label}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+          icon={
+            owner ? (
+              <SoloOwnerAvatar owner={owner} />
+            ) : (
+              <UsersIcon size="1rem" aria-hidden="true" />
+            )
+          }
+        />
+      )}
       {open && (
         <ChannelMembersDialog
           key={channelId}
@@ -1796,14 +1820,7 @@ export function ChannelMembersDialog({
             : selection.expectedRole === "absent"
               ? "Add member?"
               : `Change access to ${memberAccessLabel(selection.role)}?`
-          : (title ??
-            (solo && readOnlyAccess
-              ? "Chat access"
-              : solo
-                ? "Share access"
-                : readOnlyAccess
-                  ? "Channel access"
-                  : "Manage members"))
+          : (title ?? memberAccess(channel).title)
       }
       height={selection ? "content" : generalAccess ? "stable-tall" : "stable"}
       bodyLayout={selection ? "flow" : "flex"}

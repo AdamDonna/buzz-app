@@ -1,7 +1,6 @@
 import {
   AlarmIcon,
   BellIcon,
-  BestieIcon,
   BrowserIcon,
   ChartBarIcon,
   ChatsCircleIcon,
@@ -29,10 +28,20 @@ const bundledOrder = [
   "buzz.reminders/reminders",
   "buzz.bestie/bestie",
 ];
-export function orderPages(pages: readonly RegisteredPage[]) {
+const dockOrder = [
+  "buzz.bestie/bestie",
+  "buzz.inbox/inbox",
+  "buzz.channels/channels",
+  "buzz.reminders/reminders",
+];
+export function orderPages(
+  pages: readonly RegisteredPage[],
+  location: "default" | "dock" = "default",
+) {
+  const order = location === "dock" ? dockOrder : bundledOrder;
   const rank = (page: RegisteredPage) => {
-    const slot = bundledOrder.indexOf(page.key);
-    return slot === -1 ? bundledOrder.length : slot;
+    const slot = order.indexOf(page.key);
+    return slot === -1 ? order.length : slot;
   };
   return [...pages].sort(
     (a, b) =>
@@ -49,7 +58,6 @@ const bundledIcons = new Map<string, typeof BrowserIcon>([
   ["buzz.inbox/inbox", BellIcon],
   ["buzz.drafts-sent/drafts-sent", SendIcon],
   ["buzz.reminders/reminders", AlarmIcon],
-  ["buzz.bestie/bestie", BestieIcon],
   ["buzz.agents/agents", RobotIcon],
   ["buzz.workflows/workflows", LightningIcon],
   ["buzz.relay-notes/notes", NoteIcon],
@@ -60,6 +68,8 @@ export function pagePlacement(page: RegisteredPage) {
   if (!page.primary) return undefined;
   switch (page.key) {
     case "buzz.channels/channels":
+    case "buzz.inbox/inbox":
+    case "buzz.bestie/bestie":
     case "buzz.reminders/reminders":
     case "buzz.agents/agents":
     case "buzz.workflows/workflows":
@@ -86,20 +96,4 @@ export function pagePresentation(page: RegisteredPage): PagePresentation {
     tone,
     ...(page.icon === undefined ? {} : { image: page.icon }),
   };
-}
-
-// Header selection describes the area; sidebar selection and routes stay exact.
-export function headerPageSelection(
-  pages: readonly RegisteredPage[],
-  selected: string,
-): string {
-  const page = pages.find((page) => page.key === selected);
-  const placement = page && pagePlacement(page);
-  const messages = pages.find((page) => page.key === "buzz.channels/channels");
-  return page &&
-    (placement === undefined || placement === "sidebar") &&
-    messages &&
-    pagePlacement(messages) === "topbar"
-    ? messages.key
-    : selected;
 }

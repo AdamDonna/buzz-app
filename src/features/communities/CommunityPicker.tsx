@@ -9,7 +9,6 @@ import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
-  CaretDownIcon,
   GlobeIcon,
   PlusIcon,
   UsersPlusIcon,
@@ -196,39 +195,33 @@ export function CommunityPicker({
         >
           <PopoverTrigger
             render={
-              client.memberships.length === 0 ? (
-                <Button
-                  ref={triggerRef}
-                  size="sm"
-                  variant="subtle"
-                  aria-label="Community switcher: Communities"
-                >
-                  Communities
-                  <CaretDownIcon size={16} aria-hidden="true" />
-                </Button>
-              ) : (
-                <IconButton
-                  ref={triggerRef}
-                  size="md"
-                  variant="avatar"
-                  shape="round"
-                  aria-label={`Community switcher: ${active ? communityName(active) : "Personal space"}`}
-                  title={active ? communityName(active) : "Personal space"}
-                  icon={
-                    active ? (
-                      <Avatar
-                        size="small"
-                        shape="squircle"
-                        alt=""
-                        fallback={communityName(active)}
-                        src={active.publishedIcon ?? active.icon}
-                      />
-                    ) : (
-                      <GlobeIcon size={22} aria-hidden="true" />
-                    )
-                  }
-                />
-              )
+              <IconButton
+                ref={triggerRef}
+                size="md"
+                variant="avatar"
+                shape="round"
+                aria-label={`Community switcher: ${active ? communityName(active) : client.memberships.length === 0 ? "Communities" : "Personal space"}`}
+                title={
+                  active
+                    ? communityName(active)
+                    : client.memberships.length === 0
+                      ? "Communities"
+                      : "Personal space"
+                }
+                icon={
+                  active ? (
+                    <Avatar
+                      size="small"
+                      shape="squircle"
+                      alt=""
+                      fallback={communityName(active)}
+                      src={active.publishedIcon ?? active.icon}
+                    />
+                  ) : (
+                    <GlobeIcon size={22} aria-hidden="true" />
+                  )
+                }
+              />
             }
           />
           <PopoverPopup
@@ -256,6 +249,7 @@ export function CommunityPicker({
                       rows.length;
               rows[next]?.focus();
             }}
+            side="right"
             align="end"
             padding="list"
             finalFocus={() =>

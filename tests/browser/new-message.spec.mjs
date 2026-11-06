@@ -318,6 +318,7 @@ const test = base.extend({
   },
 });
 async function startNewMessage(page) {
+  await openPage(page, "Messages");
   const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
   const messages = sidebar.locator('[data-sidebar-section="dms"] summary');
   await messages.hover();

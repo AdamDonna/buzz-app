@@ -430,7 +430,7 @@ test.describe("crowded content tabs", () => {
     }));
     expect(geometry.scrollbar).toBeLessThanOrEqual(4);
     expect(geometry.nativeWidth).toBe("auto");
-    expect(geometry.trackHeight).toBe("4px");
+    expect(geometry.trackHeight).toBe("3px");
     await expect
       .poll(() => list.evaluate((el) => el.scrollWidth > el.clientWidth))
       .toBe(true);

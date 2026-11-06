@@ -13,10 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PageSearch, type SearchServices } from "./PageSearch";
 import type { RegisteredPage } from "../../features/pages/service";
-import {
-  createShortcutBindings,
-  SHORTCUT_BINDINGS_KEY,
-} from "../../features/shortcuts/preferences";
+import { createShortcutBindings } from "../../features/shortcuts/preferences";
 import { ShortcutsService } from "../../features/shortcuts/service";
 import { isApplePlatform } from "../../features/shortcuts/format";
 import { createRelaySession } from "../../features/relay/session";
@@ -290,7 +287,7 @@ it("selects the first typed result and keeps it as results change", async () => 
   expect(select).toHaveBeenCalledExactlyOnceWith("test/second");
 });
 
-it("shows the live search shortcut in the trigger hint and follows a rebind", async () => {
+it("shows the live search shortcut in the trigger and its hint, following a rebind", async () => {
   Object.defineProperty(navigator, "platform", {
     configurable: true,
     value: "MacIntel",
@@ -316,7 +313,9 @@ it("shows the live search shortcut in the trigger hint and follows a rebind", as
     // The title renders as a focus/hover tooltip rather than a native attribute.
     const user = userEvent.setup();
     await user.tab();
-    expect(screen.getByRole("button", { name: "Search Buzz" })).toHaveFocus();
+    const trigger = screen.getByRole("button", { name: "Search Buzz" });
+    expect(trigger).toHaveFocus();
+    expect(within(trigger).getByText("⌘K")).toBeInTheDocument();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "Search Buzz (⌘K)",
     );
@@ -324,6 +323,7 @@ it("shows the live search shortcut in the trigger hint and follows a rebind", as
       bindings.set("global-search", { key: "p", mod: true, shift: true }),
     );
     expect(screen.getByRole("tooltip")).toHaveTextContent("Search Buzz (⇧⌘P)");
+    expect(within(trigger).getByText("⇧⌘P")).toBeInTheDocument();
     act(() => bindings.reset());
     expect(screen.getByRole("tooltip")).toHaveTextContent("Search Buzz (⌘K)");
   } finally {
@@ -604,41 +604,6 @@ it("ranks pages by match when no community is connected", async () => {
   } finally {
     cleanup();
     bindings.dispose();
-    await root.fiber.dispose();
-  }
-});
-
-it("renders a restored prototype-named search key and remains resettable", async () => {
-  localStorage.setItem(
-    SHORTCUT_BINDINGS_KEY,
-    JSON.stringify({ "global-search": { key: "constructor", mod: true } }),
-  );
-  const root = new Context();
-  root.provide("pluginStatus", {
-    isActive: () => true,
-    subscribe: () => () => {},
-  });
-  const bindings = createShortcutBindings(window);
-  const shortcuts = new ShortcutsService(root, window, bindings);
-  try {
-    render(
-      <PageSearch
-        pages={[]}
-        onSelect={vi.fn()}
-        services={
-          { shortcuts, shortcutBindings: bindings } as unknown as SearchServices
-        }
-      />,
-    );
-    const user = userEvent.setup();
-    await user.tab();
-    expect(screen.getByRole("button", { name: "Search Buzz" })).toHaveFocus();
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("constructor");
-    act(() => bindings.reset());
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Ctrl+K");
-  } finally {
-    bindings.dispose();
-    localStorage.clear();
     await root.fiber.dispose();
   }
 });

@@ -1204,7 +1204,6 @@ it("labels the existing picker Communities only while no community is saved", as
   });
   const user = userEvent.setup();
   const picker = switcher();
-  expect(picker).toHaveTextContent("Communities");
   expect(picker).toHaveAccessibleName("Community switcher: Communities");
   expect(
     within(
@@ -1220,12 +1219,11 @@ it("labels the existing picker Communities only while no community is saved", as
   await waitFor(() => expect(picker).toHaveFocus());
 
   h.update({ memberships: [{ id: primary, name: "Primary" }] });
-  expect(switcher()).not.toHaveTextContent("Communities");
   expect(switcher()).toHaveAccessibleName("Community switcher: Personal space");
   h.update({ selected: primary });
   expect(switcher()).toHaveAccessibleName("Community switcher: Primary");
   h.update({ selected: null, memberships: [] });
-  expect(switcher()).toHaveTextContent("Communities");
+  expect(switcher()).toHaveAccessibleName("Community switcher: Communities");
 });
 
 it("shows only the active community until opened and routes creation through Hosted communities", async () => {

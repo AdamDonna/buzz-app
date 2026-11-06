@@ -1204,3 +1204,27 @@ html[data-keyboard-navigation]
 .sidebar [data-selected] :is(.priorityDot, .threadActivityDot) {
   background: var(--text-row-selected);
 }
+
+/* Feather only message history; the header and composer stay sharp. */
+.conversation [data-message-scroller] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black var(--space-4),
+    black calc(100% - var(--space-4)),
+    transparent
+  );
+}
+@media (forced-colors: active), (prefers-reduced-transparency: reduce) {
+  .conversation [data-message-scroller] {
+    mask-image: none;
+  }
+}
+
+.conversationBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}

@@ -19,10 +19,9 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   app,
 }, testInfo) => {
   await open(page, app);
-  const inboxButton = page.getByRole("button", {
-    name: "Activity",
-    exact: true,
-  });
+  const inboxButton = page
+    .getByRole("navigation", { name: "Apps dock", exact: true })
+    .getByRole("tab", { name: "Activity", exact: true });
   await inboxButton.click();
   const inbox = page.getByRole("region", { name: "Activity", exact: true });
   await expect(
@@ -604,9 +603,9 @@ test("narrow Inbox keeps a rejected read save and its captured Retry behind an o
   await page.clock.install({ time: base });
   await open(page, app);
   await page
-    .getByRole("button", { name: "Show navigation", exact: true })
+    .getByRole("navigation", { name: "Apps dock", exact: true })
+    .getByRole("tab", { name: "Activity", exact: true })
     .click();
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
   const inbox = page.getByRole("region", { name: "Activity", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   const filters = inbox.getByRole("button", { name: /^From / });
@@ -768,7 +767,10 @@ test.describe("Inbox names after leaving a channel", () => {
       ),
     );
     await open(page, app);
-    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Apps dock", exact: true })
+      .getByRole("tab", { name: "Activity", exact: true })
+      .click();
     const row = page
       .getByRole("region", { name: "Activity", exact: true })
       .getByRole("list", { name: "Activity", exact: true })

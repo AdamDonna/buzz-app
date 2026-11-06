@@ -836,6 +836,13 @@ function TabsSpecimen() {
         items={DESTINATIONS}
       />
       <Tabs
+        label="Dock destinations"
+        variant="dock"
+        value={panelDestination}
+        onValueChange={setPanelDestination}
+        items={iconItems}
+      />
+      <Tabs
         label="Icon segmented filters"
         variant="segmented-icons"
         value={panelDestination}

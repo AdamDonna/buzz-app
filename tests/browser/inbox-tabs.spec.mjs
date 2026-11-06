@@ -402,7 +402,10 @@ test("Reaction activity turns Unread off and opens the exact message", async ({
   );
   history.push(liveReaction);
   app.relay.publish("primary", liveReaction);
-  const icon = page.locator(".shell-page-icon [data-active]");
+  const icon = page
+    .getByRole("navigation", { name: "Apps dock", exact: true })
+    .getByRole("tab", { name: "Activity", exact: true })
+    .locator("[data-active]");
   await expect(icon).toHaveText("✅");
   await expect(icon).toHaveAttribute("aria-hidden", "true");
   await page.screenshot({ path: testInfo.outputPath("reaction-bell.png") });
@@ -430,7 +433,8 @@ test("Reaction activity turns Unread off and opens the exact message", async ({
   history.push(custom);
   app.relay.publish("primary", custom);
   await expect(icon.locator("img")).toBeVisible();
-  await expect(icon.locator("img")).toHaveCSS("width", "14px");
+  // The dock tile is larger than a sidebar row, and so is its emoji.
+  await expect(icon.locator("img")).toHaveCSS("width", "18px");
   await expect(icon.locator("img").locator("..")).toHaveCSS("opacity", "1");
   await page.screenshot({ path: testInfo.outputPath("reaction-custom.png") });
   await expect(icon).toHaveCount(0);
@@ -462,7 +466,9 @@ test("Reaction activity turns Unread off and opens the exact message", async ({
     });
   }
 
-  for (const width of [1280, 558, 540, 420]) {
+  // Each window width leaves the dock's 66px beside the list: a 540px list at
+  // 606, then 522px and 402px lists, where Unread and then From wrap.
+  for (const width of [1280, 606, 588, 468]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(
       inbox.getByRole("tab", { name: "Reactions", exact: true }),
@@ -496,13 +502,13 @@ test("Reaction activity turns Unread off and opens the exact message", async ({
         unreadY: centerY('[role="switch"][aria-label="Unread"]'),
       };
     });
-    if (width === 558) {
+    if (width === 606) {
       expect(geometry.width).toBe(540);
       expect(Math.abs(geometry.tabsY - geometry.unreadY)).toBeLessThan(3);
-    } else if (width === 540) {
+    } else if (width === 588) {
       expect(geometry.unreadY).toBeGreaterThan(geometry.tabsY + 20);
       expect(Math.abs(geometry.tabsY - geometry.fromY)).toBeLessThan(3);
-    } else if (width === 420) {
+    } else if (width === 468) {
       expect(geometry.fromY).toBeGreaterThan(geometry.tabsY + 20);
       expect(Math.abs(geometry.fromY - geometry.unreadY)).toBeLessThan(3);
     }

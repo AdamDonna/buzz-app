@@ -10,7 +10,6 @@ import {
 } from "react";
 import { MagnifyingGlassIcon } from "../../shared/design-system/icons/index";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
-import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Button } from "../../shared/design-system/ui/Button";
 import type { RegisteredPage } from "../../features/pages/service";
 import { communityDestination } from "../../features/communities/destination";
@@ -21,6 +20,7 @@ import {
   formatBinding,
   isApplePlatform,
 } from "../../features/shortcuts/format";
+import { KeyCombo } from "../../features/shortcuts/KeyCombo";
 import type { ShortcutBindingsSnapshot } from "../../features/shortcuts/preferences";
 import type { AppServices } from "../services";
 import { HOST_SHORTCUT_ORDER } from "../shortcuts";
@@ -205,6 +205,8 @@ export function PageSearch({
     services?.shortcutBindings.subscribe ?? noSubscribe,
     services?.shortcutBindings.snapshot ?? noOverrides,
   );
+  const binding = overrides[SEARCH_ID] ?? SEARCH_BINDING;
+  const apple = isApplePlatform(navigator.platform);
   // Every search surface reads pages from here, so rank and underline them
   // here too: the disconnected and personal-space views show this list as is.
   const needle = query.trim().toLowerCase();
@@ -246,26 +248,28 @@ export function PageSearch({
         setSearchOpen(false);
       },
     }));
-  const shortcut = formatBinding(
-    overrides[SEARCH_ID] ?? SEARCH_BINDING,
-    isApplePlatform(navigator.platform),
-  ).text;
   return (
     <>
-      <IconButton
-        hint="familiar"
+      <Button
         ref={trigger}
         variant="inverted"
-        size="md"
-        shape="round"
+        size="sm"
+        shape="capsule"
         aria-label="Search Buzz"
-        title={`Search Buzz (${shortcut})`}
+        title={`Search Buzz (${formatBinding(binding, apple).text})`}
         onClick={() => {
           trigger.current?.focus();
           begin();
         }}
-        icon={<MagnifyingGlassIcon size={16} aria-hidden="true" />}
-      />
+      >
+        <span className="shell-search-content">
+          <MagnifyingGlassIcon size={16} aria-hidden="true" />
+          <span className="shell-search-label">Search</span>
+          <span className="shell-search-shortcut">
+            <KeyCombo binding={binding} apple={apple} />
+          </span>
+        </span>
+      </Button>
       <Dialog
         open={open}
         onOpenChange={setSearchOpen}

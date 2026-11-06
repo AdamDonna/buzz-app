@@ -52,18 +52,12 @@ async function expectNonPaging(page, app) {
 const button = (page, name) => page.getByRole("button", { name, exact: true });
 const companionLauncher = (page, name) =>
   button(page, name).and(page.locator("button[aria-expanded]"));
-// The fixture's active plugin pages, in shell order, lead the channel sidebar.
-// Sidebar rows exclude header pages; Messages remains available through search.
-const destinationTitles = ["Activity", "Drafts & sent", "Bestie"];
-// Drafts & sent shows its draft count beside the label once a draft exists.
-const destinationText = destinationTitles.map((title) =>
-  title === "Drafts & sent" ? /^Drafts & sent(?:\d+)?$/ : title,
-);
-const sidebarDestinations = (page, options = {}) =>
+// Global destinations live in the dock independently of the Messages sidebar.
+const destinationTitles = ["Bestie", "Activity"];
+const dockDestinations = (page, options = {}) =>
   page
-    .getByRole("complementary", { name: "Sidebar", exact: true, ...options })
-    .getByRole("navigation", { name: "Pages", ...options })
-    .getByRole("button", options);
+    .getByRole("navigation", { name: "Apps dock", ...options })
+    .getByRole("tab", { name: /^(Bestie|Activity)$/, ...options });
 const companionReadingTest = readingTest.extend({ companionFixture: true });
 const box = async (locator) => {
   const bounds = await locator.boundingBox();
@@ -150,53 +144,54 @@ async function shellFits(page, width) {
   if (collapsed) await disclosure.click();
   // Settings is a modal with its own navigation; the shell is measured with
   // Settings closed.
-  const destinations = sidebarDestinations(page);
-  await expect(destinations).toHaveText(destinationText);
-  const sidebar = await box(
-    page.getByRole("complementary", { name: "Sidebar", exact: true }),
-  );
-  const first = await box(destinations.first());
-  const last = await box(destinations.last());
-  for (const destination of [first, last]) {
-    expect(destination.x).toBeGreaterThanOrEqual(sidebar.x);
-    expect(destination.x + destination.width).toBeLessThanOrEqual(
-      sidebar.x + sidebar.width,
-    );
+  const destinations = dockDestinations(page);
+  await expect(destinations).toHaveText(destinationTitles);
+  const dock = await box(page.getByRole("navigation", { name: "Apps dock" }));
+  for (const destination of [destinations.first(), destinations.last()]) {
+    await destination.scrollIntoViewIfNeeded();
+    await expect(destination).toBeInViewport();
+    const bounds = await box(destination);
+    expect(bounds.x).toBeGreaterThanOrEqual(dock.x);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(dock.x + dock.width);
   }
-  const channels = page.getByRole("navigation", {
-    name: "Subscribed channels",
+  // Sidebar pages, such as the bundled Drafts & sent, stay in the Messages
+  // sidebar instead of the dock. Its draft count may follow the label.
+  const sidebar = page.getByRole("complementary", {
+    name: "Sidebar",
+    exact: true,
   });
-  const section = channels.locator("[data-sidebar-section]").first();
-  if (await section.count()) {
-    // Primary destinations lead the roster rather than overlapping its sections.
-    expect(last.y + last.height).toBeLessThanOrEqual((await box(section)).y);
-    expect((await box(channels)).height).toBeGreaterThan(40);
-  }
-  // At short heights destinations scroll with the roster and remain reachable.
-  await destinations.last().scrollIntoViewIfNeeded();
-  await expect(destinations.last()).toBeInViewport();
-  if (await channels.count())
-    await channels.evaluate((element) => {
-      element.scrollTop = 0;
-    });
-  // The header keeps its launchers; sidebar destinations are not duplicated
-  // there. Bestie's header button is its companion launcher, not a page row.
+  const drafts = sidebar
+    .getByRole("navigation", { name: "Pages" })
+    .getByRole("button", { name: /^Drafts & sent/ });
+  await expect(drafts).toHaveText(/^Drafts & sent(?:\d+)?$/);
+  await drafts.scrollIntoViewIfNeeded();
+  const sidebarBounds = await box(sidebar);
+  const draftsBounds = await box(drafts);
+  expect(draftsBounds.x).toBeGreaterThanOrEqual(sidebarBounds.x);
+  expect(draftsBounds.x + draftsBounds.width).toBeLessThanOrEqual(
+    sidebarBounds.x + sidebarBounds.width,
+  );
   await expect(
-    page.locator(".shell-header").getByRole("button", {
-      name: new RegExp(
-        `^(${destinationTitles.filter((title) => title !== "Bestie").join("|")})$`,
-      ),
-      includeHidden: true,
-    }),
+    page
+      .getByRole("navigation", { name: "Apps dock" })
+      .getByRole("tab", { name: /Drafts & sent/ }),
   ).toHaveCount(0);
   const actions = await box(page.locator(".shell-actions"));
   const communities = await box(
     page.getByRole("navigation", { name: "Communities", exact: true }),
   );
   expect(actions.x + actions.width).toBeLessThanOrEqual(width);
-  expect(communities.x).toBeGreaterThanOrEqual(actions.x);
   const profile = await box(button(page, "Your profile"));
-  expect(communities.x + communities.width).toBeLessThanOrEqual(profile.x);
+  // Account controls remain reachable below the independently scrolling apps.
+  for (const control of [communities, profile]) {
+    expect(control.x).toBeGreaterThanOrEqual(dock.x);
+    expect(control.x + control.width).toBeLessThanOrEqual(dock.x + dock.width);
+    expect(control.y).toBeGreaterThanOrEqual(dock.y);
+    expect(control.y + control.height).toBeLessThanOrEqual(
+      dock.y + dock.height,
+    );
+  }
+  expect(communities.y + communities.height).toBeLessThanOrEqual(profile.y);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
     .toBe(width);
@@ -244,7 +239,7 @@ scroll(
   },
 );
 
-test("separate sidebar and workspace surfaces, real link panel and compact community navigation", async ({
+test("joined sidebar and workspace surface, real link panel and compact community navigation", async ({
   page,
   app,
 }, testInfo) => {
@@ -258,40 +253,30 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
     name: "Conversation",
     exact: true,
   });
-  // Sidebar and main workspace own independent rounded surfaces. Inner
-  // conversation regions still join the main panel.
+  // The sidebar and main are flush regions inside one outer panel.
   const mainPanel = page.locator("#main-content > [data-joined]");
-  await expect(mainPanel).toHaveCSS("border-top-width", "1px");
-  await expect(mainPanel).toHaveCSS("border-radius", "24px");
-  await expect(page.locator(".shell-content")).toHaveCSS(
-    "background-color",
-    "rgba(0, 0, 0, 0)",
-  );
-  const navigation = page.getByRole("complementary", {
-    name: "Sidebar",
-    exact: true,
-  });
-  await expect(navigation).toHaveCSS("background-color", "rgb(255, 255, 255)");
-  await expect(navigation).toHaveCSS("border-radius", "24px");
-  await expect(navigation).toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
-  await expect(mainPanel).toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
-  expect(
-    await navigation.evaluate((element) => getComputedStyle(element).boxShadow),
-  ).not.toBe("none");
-  expect(
-    await mainPanel.evaluate((element) => getComputedStyle(element).boxShadow),
-  ).not.toBe("none");
   const gap = await panelGap(page);
-  near((await box(mainPanel)).x - sidebar.x - sidebar.width, gap);
+  near((await box(mainPanel)).x, sidebar.x + sidebar.width);
+  const seam = page.locator("#shell-navigation");
+  await expect
+    .poll(() =>
+      seam.evaluate((element) => {
+        const style = getComputedStyle(element, "::after");
+        return (
+          style.content !== "none" &&
+          Number.parseFloat(style.width) > 0 &&
+          style.backgroundColor !== "rgba(0, 0, 0, 0)"
+        );
+      }),
+    )
+    .toBe(true);
   const sidebarHandle = page.getByRole("separator", {
     name: "Resize sidebar",
   });
   const gripTarget = await box(sidebarHandle);
-  near(gripTarget.width, 16);
-  near(
-    gripTarget.x + gripTarget.width / 2,
-    sidebar.x + sidebar.width + gap / 2,
-  );
+  near(gripTarget.width, 8);
+  // The hit target starts at the seam so it cannot block sidebar controls.
+  near(gripTarget.x, sidebar.x + sidebar.width);
   await sidebarHandle.hover();
   await expect
     .poll(() =>
@@ -306,7 +291,7 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
         (element) => getComputedStyle(element, "::after").left,
       ),
     )
-    .toBe("8px");
+    .toBe("0px");
   await page.mouse.move(0, 0);
   await expect(conversation).toHaveCSS("border-radius", "0px");
   await expect(conversation).toHaveCSS("border-top-width", "0px");
@@ -315,14 +300,19 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
   const rail = await box(
     page.getByRole("navigation", { name: "Communities", exact: true }),
   );
-  near(rail.width, 32);
-  near(sidebar.x, gap);
+  const appDock = await box(
+    page.getByRole("navigation", { name: "Apps dock" }),
+  );
+  near(sidebar.x, appDock.x + appDock.width + 1);
   const profile = await box(button(page, "Your profile"));
-  near(rail.x + rail.width, profile.x);
-  // The conversation starts inside the main panel's reserved 1px border.
-  near(before.x - sidebar.x - sidebar.width, gap + 1);
-  near(before.y, 57);
-  near(before.height, 766);
+  near(rail.x + rail.width / 2, profile.x + profile.width / 2);
+  near(before.x, sidebar.x + sidebar.width);
+  near(
+    before.y,
+    (await box(page.locator(".shell-header"))).y +
+      (await box(page.locator(".shell-header"))).height +
+      1,
+  );
   const background = await page
     .locator(".shell-background")
     .evaluate((el) => getComputedStyle(el).backgroundImage);
@@ -382,7 +372,7 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
   near(await timeline.evaluate((el) => el.scrollTop), offset);
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   await expect(panel(page)).toHaveCount(0);
@@ -439,7 +429,7 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
   await expect(panel(page)).toBeVisible();
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   await expect(panel(page)).toHaveCount(0);
@@ -447,7 +437,7 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
   await link(page, app, "https://github.com/block/buzz/pull/3");
   await expect(
     page.locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     ),
   ).toBeInViewport();
   const narrow = await box(page.locator("[data-panel-workspace]"));
@@ -456,7 +446,7 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
   near(narrow.width, narrowConversation.width);
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   await expect(composer).toBeInViewport();
@@ -464,14 +454,14 @@ test("separate sidebar and workspace surfaces, real link panel and compact commu
   // Search selection and the header share page state, so Workflows is current.
   // The host focuses main when the independent page opens.
   await expect(page.getByRole("main")).toBeFocused();
-  const hiddenDestinations = sidebarDestinations(page, { includeHidden: true });
-  await expect(hiddenDestinations).toHaveText(destinationText);
+  const hiddenDestinations = dockDestinations(page, { includeHidden: true });
+  await expect(hiddenDestinations).toHaveText(destinationTitles);
   await expect(
     hiddenDestinations.and(page.locator("[aria-current]")),
   ).toHaveCount(0);
   await expect(
     page
-      .getByRole("navigation", { name: "Topbar pages", includeHidden: true })
+      .getByRole("navigation", { name: "Apps dock", includeHidden: true })
       .getByRole("tab", {
         name: "Workflows",
         exact: true,
@@ -528,12 +518,12 @@ test("narrow link panels begin after the rendered sidebar", async ({
     page.getByRole("article", { name: "Conversation", exact: true }),
   );
   const dock = await box(page.locator("[data-panel-workspace]"));
-  near(conversation.x - sidebar.x - sidebar.width, (await panelGap(page)) + 1);
+  near(conversation.x, sidebar.x + sidebar.width);
   near(dock.x, conversation.x);
   expect(dock.x).toBeGreaterThanOrEqual(sidebar.x + sidebar.width);
   // Separate stacking contexts: assert actual hit testing, not unrelated z-index numbers.
   const close = page.locator(
-    '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
   );
   expect(
     await close.evaluate((element) => {
@@ -672,7 +662,7 @@ readingTest(
     ).toBeInViewport();
     await page
       .locator(
-        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
       )
       .click();
     await expect(page.locator("[data-panel-dock][data-closing]")).toHaveCount(
@@ -725,13 +715,13 @@ readingTest(
     });
     await page
       .locator(
-        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
       )
       .focus();
     await expect(opener(page, target)).not.toBeInViewport();
     await page
       .locator(
-        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
       )
       .click();
     const trigger = opener(page, target);
@@ -946,7 +936,7 @@ companionTest(
     await launch.click();
     await page
       .locator(
-        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
       )
       .click();
     near((await box(companion)).height, (await box(conversation)).height);
@@ -1114,7 +1104,7 @@ todosOverlapTest(
           .getByRole("article", { name: "Conversation", exact: true })
           .locator("header.panel-header"),
       );
-      near(threadHeader.height, channelHeader.height);
+      expect(threadHeader.height).toBeCloseTo(channelHeader.height, 1);
       near(threadHeader.y, channelHeader.y);
     };
 
@@ -1123,7 +1113,7 @@ todosOverlapTest(
     await stacked(thread);
     await page
       .locator(
-        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "]',
       )
       .click();
     await button(page, "Hide todos").click();
@@ -1132,7 +1122,7 @@ todosOverlapTest(
     await stacked(thread);
     await page
       .locator(
-        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "]',
       )
       .click();
 
@@ -1140,7 +1130,7 @@ todosOverlapTest(
     await stacked(linked);
     await page
       .locator(
-        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
       )
       .click();
     await button(page, "Hide todos").click();
@@ -1204,7 +1194,7 @@ companionReadingTest(
       }).toPass({ timeout: 10_000 });
       await expect(
         page.locator(
-          '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+          '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
         ),
       ).toBeInViewport();
       await expect(
@@ -1229,7 +1219,7 @@ companionReadingTest(
       await button(page, "Close Channel settings tab").click();
       await expect(
         page.locator(
-          '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+          '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
         ),
       ).toBeInViewport();
     }
@@ -1356,7 +1346,7 @@ sidebarActions(
       await expect(panel(page)).toBeVisible();
       await page
         .locator(
-          '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+          '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
         )
         .click();
       await expect(companion).toBeVisible();

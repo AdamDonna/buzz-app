@@ -89,7 +89,7 @@ test("launch opens Messages without exposing Home across responsive navigation, 
       .toBe(true);
   }
   await page
-    .getByRole("button", { name: "Manage members", exact: true })
+    .getByRole("button", { name: /^Manage members of /, exact: true })
     .click();
   await expect(
     page.getByRole("dialog", { name: "Manage members", exact: true }),
@@ -189,7 +189,7 @@ test("default navigation retries failed metadata and accepts a completed empty l
     page.getByRole("button", { name: "alpha", exact: true }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Manage members", exact: true })
+    .getByRole("button", { name: /^Manage members of /, exact: true })
     .click();
   await expect(
     page.getByRole("dialog", { name: "Manage members", exact: true }),

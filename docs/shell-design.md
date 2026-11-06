@@ -45,7 +45,8 @@ semantic tokens, UI authoring rules and the local component reference.
   follow by displayed label with a full contribution-key tie-breaker. Sidebar
   navigation and page search share this ordering, independent of plugin
   activation/re-enable order. Primary pages choose `sidebar` (default), `topbar`
-  (header segments) or `toolbar` (top-right icon) placement for contributed pages.
+  or `toolbar` placement for contributed pages; the host groups the latter two
+  in its left app dock.
   `PrimarySidebar` is the conversation sidebar: a capsule All / Solo / Team
   filter above one shared scrollport, Solo projects and chats above Team's channel
   sections, one relay-recovery notice, and the connection fallback. The filter
@@ -53,9 +54,10 @@ semantic tokens, UI authoring rules and the local component reference.
   reveals the inventory its placement belongs to unless the filter is All. Both
   inventories stay mounted when filtered, retaining section state, and share the
   channel sidebar's surface, resize owner, row treatment and section recipes.
-  Inbox and Bestie remain in the sidebar; other built-in global page links live in
-  the header capsule. The header plus opens the New menu for chat, project, DM
-  and channel creation. Every conversation, Solo or Team, opens in Messages; see
+  Bestie and Inbox lead the left app dock, followed by Messages and the other
+  dock destinations. Sidebar-placed contributions remain in the conversation
+  sidebar. Its plus opens New for chat, project, DM and channel creation;
+  Cmd/Ctrl+N opens that menu only where the current app has a creation sidebar. Every conversation, Solo or Team, opens in Messages; see
   [Solo](solo/README.md) for the Solo treatment, placement and the relay privacy
   boundary. Messages is the default destination.
   Page search lists every active page, including non-primary pages.
@@ -64,19 +66,19 @@ semantic tokens, UI authoring rules and the local component reference.
   compatibility; all pages share the supplied gradient and repeating CSS dots.
   Presentation is keyed by full contribution identity, not plugin-local IDs.
 - `AppShell.tsx` owns the header, contributed panel launchers, Settings access,
-  community switcher, and page frames. The header uses capsule Panel surfaces:
-  flat sidebar/history controls at the left, window-centered destinations flanked by
-  separate creation and Search capsules, and flat community/profile controls at the right. Outer content
-  padding uses the same panel-gap token as the space between panes.
-  Messages, Reminders, Agents and Workflows use header segments,
-  preserving contributed placement for other plugins. The community trigger opens
+  community switcher, and page frames. Sidebar/history controls sit at the left,
+  Search centers in wide windows and fills the available space in compact windows,
+  and community/profile controls sit at the bottom of the left dock. Search retains 24pt side gaps
+  and wraps only when its compact control cannot fit. The left app dock uses
+  theme-accent selection and stable icon tiles. Outer content padding uses the
+  same panel-gap token as the space between panes. The community trigger opens
   a shared Popover containing NavigationItem rows with their existing context menus;
   this richer picker retains community actions as well as switching. Arrow keys,
   Home and End move focus. Join and Create community appear at the bottom; creation
   opens the registered Builderlab settings flow. Dialogs return focus to
   the surviving community trigger.
-  Switching pages preserves the desktop sidebar’s current visibility. The manual
-  collapse toggle remains available across destinations.
+  Switching pages preserves the desktop sidebar’s collapse preference. The
+  manual toggle appears only where the selected app supplies a sidebar.
   The conversation sidebar and page-contributed sidebars share one saved
   per-community width and resize behavior.
   Settings opens in the shared expanded Dialog with an integrated sidebar; the
@@ -97,7 +99,8 @@ semantic tokens, UI authoring rules and the local component reference.
   survives target changes and stays mounted beneath Settings. A failed sidebar
   shows an alert and scrollable page navigation in the standard frame; a new
   workspace navigation request retries it independently of the page body.
-  Pages without a sidebar contribution keep the conversation sidebar.
+  Messages uses the conversation sidebar. Other pages show a sidebar only when
+  they contribute `Page.sidebar`; apps without one hide the retained navigation.
   `App.tsx` composes `PrimarySidebar` around `features/channel-navigation/ChannelInventory`. The inventory supplies channel rows,
   notices, dialogs and scroll bindings through a render prop; PrimarySidebar owns
   the common frame, Solo/Team arrangement and error fallback. The fallback retains
@@ -106,43 +109,36 @@ semantic tokens, UI authoring rules and the local component reference.
   unrelated pages. Its own error boundary keeps page navigation and Settings usable.
   Page buttons use shared navigation rows and focus the main region on selection.
   At short heights page rows scroll with the channel list rather than in their own list.
-  At widths up to 650px, every page collapses navigation behind the header’s
-  Show navigation button to preserve readable content at 200% text size. The
-  220px disclosure overlays content, supports Escape, and keeps sidebar state
+  At widths up to 650px, Messages and pages with a sidebar contribution collapse
+  navigation behind the header’s Show navigation button to preserve readable
+  content at 200% text size. The 220px disclosure overlays content, supports
+  Escape, and keeps sidebar state
   mounted. A navigation selection closes the phone drawer and hands focus to the
   main content for conversation selections. Settings owns its navigation inside
-  the modal instead. Messages, Agents, any selected primary page, and pages with
-  a sidebar contribution share an
-  animated header toggle; hiding the sidebar preserves its mounted state and saved
-  width. The toggle uses "Hide sidebar" / "Show sidebar" on every page, and the
-  combined Solo and Team sidebar is labelled "Sidebar". Reduced motion disables the transition. Non-primary
-  desktop destinations without a sidebar contribution retain the visible sidebar.
-  The same header keeps history and account/search actions, plus a segmented
-  navigation strip and full-page toolbar icons. Real control widths, native insets
-  and text scale determine whether header pages fit without overlap. Otherwise
-  those entries move into a labelled More pages popover (always at <=650px).
-  Wide topbar pages use design-system segmented tabs with manual activation: arrow
-  keys move focus, and Enter or Space selects the page while focus stays on its
-  tab. Each opening carries focus intent: topbar activation suppresses destination
+  the modal instead. On desktop, Messages and pages with a sidebar contribution
+  use an animated "Hide sidebar" / "Show sidebar" toggle; hiding the sidebar
+  preserves its mounted state and saved width. The combined Solo and Team sidebar
+  is labelled "Sidebar". Reduced motion disables the transition.
+  The header keeps history, Search and account actions. App navigation stays in
+  the left dock at every width, with scrolling when its destinations exceed the
+  available height. The dock uses vertical design-system Tabs with manual
+  activation: Up/Down move focus, and Enter or Space selects the page while focus
+  stays on its tab. Inactive pages may supply a rich hover preview; selected
+  pages and pages without previews use instant right-side label tooltips.
+  Each opening carries focus intent: dock activation suppresses destination
   autofocus, while explicit New conversation, sidebar and deep-link openings keep
   their content focus. This intent is not saved in addresses or history; retry
   preserves it for the same opening. A focused Retry navigation control hands
   focus to main once retry removes it, even if reconnect temporarily remounts
   the shell. A new opening or focus elsewhere cancels this
-  handoff. The selected page is a separately focusable,
-  labelled tabpanel. Toolbar
-  and overflow destinations remain native buttons using `aria-current` and
-  focus main content on selection. Header pages never become companion launchers.
-  Independent header pages retain exact destination selection. Messages stays
-  selected for registered sidebar/default-placement pages, including non-primary
-  pages reached through search or links; their sidebar selection and route remain
-  exact. Its tab labels the active child panel, and activating Messages from a
-  child returns to the existing conversation view. More pages indicates this
-  containing area with `aria-current="true"` (not `page`). Settings leaves
-  workspace selection unchanged; missing/unregistered destinations do not borrow Messages selection.
+  handoff. A selected dock page is a separately focusable, labelled tabpanel.
+  Dock destinations retain exact selection; sidebar/default-placement pages and
+  missing destinations leave every dock tile unselected. Sidebar page links retain
+  their exact route and focus main content when selected. Dock destinations never
+  become companion launchers.
   The shell owns one joined Panel around navigation and page content, with a
-  16px outer gutter (8px on narrow screens). Nested Panels keep their opaque
-  fill and clipping but drop individual borders, radii, and shadows. Layout
+  panel-gap outer gutter beside the dock, at the right and below. Nested Panels
+  keep their opaque fill and clipping but drop individual borders, radii, and shadows. Layout
   owners add one-pixel semantic dividers. Document pages scroll inside the
   remaining viewport.
 - `SettingsSidebar.tsx` composes shared SidebarNavigation with

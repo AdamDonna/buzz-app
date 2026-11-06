@@ -110,7 +110,7 @@ test("a presence badge preserves the sidebar avatar center and header insets", a
   const avatar = row.locator(".buzz-avatar-status");
   await expect(avatar).toHaveAttribute("data-status", "away");
   await page
-    .getByRole("button", { name: "Manage members", exact: true })
+    .getByRole("button", { name: /^Manage members of /, exact: true })
     .click();
   await page
     .getByRole("button", { name: /^Open profile for Alice Fixture/ })
@@ -152,13 +152,14 @@ test("a presence badge preserves the sidebar avatar center and header insets", a
         .poll(() =>
           header.evaluate((element) => {
             const frame = element.getBoundingClientRect();
-            const tab = element
-              .querySelector('[role="tab"]')
-              .getBoundingClientRect();
-            const outer = element.closest(".panel[data-joined]");
-            const bandTop = outer.getBoundingClientRect().top;
+            const tab = (
+              element.querySelector('[role="tab"]') ??
+              element.querySelector("[data-workspace-identity] button")
+            ).getBoundingClientRect();
+            // The joined panel's outer border is outside this header's band.
+            const bandTop = frame.top;
             const separator = parseFloat(
-              getComputedStyle(element, "::after").height,
+              getComputedStyle(element).borderBottomWidth,
             );
             const bandBottom = frame.bottom - separator;
             return Math.abs(tab.top - bandTop - (bandBottom - tab.bottom));

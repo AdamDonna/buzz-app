@@ -103,6 +103,22 @@
   padding: 0 var(--space-row-gap) var(--space-panel-inset);
 }
 
+/* The row owns avatar geometry; Avatar owns its artwork and identity shape. */
+.rowAvatar {
+  display: grid;
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+}
+
+/* Keep readable labels and the standard outer gutter beside the narrow dock. */
+@container inbox-list (max-width: 30rem) {
+  .rowAvatar {
+    width: var(--space-6);
+    height: var(--space-6);
+  }
+}
+
 .row {
   min-width: 0;
 }

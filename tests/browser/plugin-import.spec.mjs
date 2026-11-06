@@ -471,11 +471,11 @@ test("Settings controls scale together and keep enlarged labels reachable", asyn
       // The shell toolbar stays mounted, though hidden, behind the modal.
       await expect(
         page.getByRole("button", {
-          name: "Search Buzz",
+          name: "Your profile",
           exact: true,
           includeHidden: true,
         }),
-      ).toHaveAttribute("data-icon-size", "md");
+      ).toHaveAttribute("data-icon-size", "sm");
       await expect
         .poll(() =>
           settingsDialog(page)
