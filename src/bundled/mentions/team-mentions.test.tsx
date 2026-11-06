@@ -30,7 +30,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MentionCompletion } from "./MentionCompletion";
 import { MentionPicker } from "./MentionPicker";
 import { mentionQuery } from "./mention-query";
-import { useMentionChoices } from "./use-mention-choices";
+import { MENTION_ROWS, useMentionChoices } from "./use-mention-choices";
 import { useTeamMentions } from "./use-team-mentions";
 import { createAgentLibrary } from "../../features/agents/library";
 import { createAgentChoices } from "../../features/agents/choices";
@@ -535,6 +535,21 @@ it.each([false, true])(
     }
   },
 );
+
+it("more members than the shown rows rank only the first rows", async () => {
+  const h = fixture({ count: MENTION_ROWS + 1, team: 0 });
+  const view = renderHook(() =>
+    useMentionChoices(h.session, "parent", false, "", "open", true),
+  );
+  try {
+    await waitFor(() =>
+      expect(view.result.current.choices).toHaveLength(MENTION_ROWS),
+    );
+  } finally {
+    view.unmount();
+    h.library.dispose();
+  }
+});
 
 it("reserves room for teams ready when the first 50-choice budget installs", async () => {
   const h = fixture({ count: 50 });
