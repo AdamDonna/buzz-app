@@ -139,6 +139,11 @@ export function createDirectMessages(
       );
       return { authority, profiles };
     },
+    /** Whether a search has answered for `pubkey` since `verified` last read
+     * it: a lookup that read nothing earlier is out of date. */
+    searched(pubkey: string, authority: VerifiedProfileAuthority) {
+      return searchProfiles.answered(pubkey, authority);
+    },
     async open(pubkeys: readonly string[], signal: AbortSignal) {
       if (!available || !transport?.openDirectMessage)
         throw new Error("This connection cannot start direct messages.");

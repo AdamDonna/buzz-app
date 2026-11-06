@@ -1,6 +1,8 @@
 import { nip19 } from "nostr-tools";
+import type { Profile } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
 import { foldProfiles } from "../relay/profiles";
+import { searchedProfiles } from "../relay/profile-search";
 import { matchPerson } from "../search/person-match";
 
 export const MEMBER_SEARCH_PAGE_SIZE = 30;
@@ -24,22 +26,31 @@ export async function searchMembers(
       // An incomplete public key remains an ordinary query while typing.
     }
   }
-  const events = exact
-    ? await session.read(
-        [{ kinds: [0], authors: [exact], limit: MEMBER_SEARCH_PAGE_SIZE }],
-        { signal },
-      )
-    : await session.searchProfiles(text, {
-        limit: MEMBER_SEARCH_PAGE_SIZE,
-        page,
-        signal,
-      });
-  signal.throwIfAborted();
-  const profiles = foldProfiles(
-    events.filter(
-      (event) => event.kind === 0 && (!exact || event.pubkey === exact),
-    ),
-  );
+  let profiles: Map<string, Profile>;
+  let more = false;
+  if (exact) {
+    const events = await session.read(
+      [{ kinds: [0], authors: [exact], limit: MEMBER_SEARCH_PAGE_SIZE }],
+      { signal },
+    );
+    signal.throwIfAborted();
+    profiles = foldProfiles(
+      events.filter((event) => event.kind === 0 && event.pubkey === exact),
+    );
+    // A whole key names its owner even without a profile; the relay decides
+    // whether they can be added.
+    if (!profiles.has(exact))
+      profiles.set(exact, { name: exact.slice(0, 10), nameIsFallback: true });
+  } else {
+    const events = await session.searchProfiles(text, {
+      limit: MEMBER_SEARCH_PAGE_SIZE,
+      page,
+      signal,
+    });
+    signal.throwIfAborted();
+    profiles = searchedProfiles(events, session.profiles.verifiedAuthority?.());
+    more = events.length >= MEMBER_SEARCH_PAGE_SIZE;
+  }
   // Rank the relay's page by the shared name rule.
   const score = (name: string) => matchPerson(name, text)?.tier ?? 4;
   return {
@@ -51,7 +62,7 @@ export async function searchMembers(
           a.name.localeCompare(b.name) ||
           a.pubkey.localeCompare(b.pubkey),
       ),
-    more: !exact && events.length >= MEMBER_SEARCH_PAGE_SIZE,
+    more,
   };
 }
 export type MemberSearchResult = Awaited<ReturnType<typeof searchMembers>>;

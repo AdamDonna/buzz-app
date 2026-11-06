@@ -21,6 +21,7 @@ import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import type { LiveCallbacks } from "../../features/relay/live";
 import { createRelaySession } from "../../features/relay/session";
+import type { VerifiedProfileAuthority } from "../../features/relay/verified-profile";
 import {
   keypair,
   metadata,
@@ -36,7 +37,7 @@ import {
   recordVisit,
 } from "../../features/search/usage";
 import { matchesEvent } from "../../features/relay/projection";
-import type { RelayEvent } from "../../features/relay/events";
+import { eventDto, type RelayEvent } from "../../features/relay/events";
 import { PublishRejected } from "../../features/relay/outbox";
 import type { AgentLibrary } from "../../features/agents/library";
 import { localAgentsFixture } from "../../features/agents/local-testing";
@@ -115,12 +116,14 @@ async function setup(
       page: number,
     ) => Promise<RelayEvent[]>;
     communities?: CommunityReader;
+    relay?: ReturnType<typeof keypair>;
+    verifiedProfiles?: VerifiedProfileAuthority;
     visibility?: "private" | "public";
     joinRole?: "member" | "guest";
   } = {},
 ) {
   const viewer = keypair(),
-    relay = keypair(),
+    relay = options.relay ?? keypair(),
     person = keypair();
   const agent = {
     pubkey: "ab".repeat(32),
@@ -232,6 +235,9 @@ async function setup(
       },
       ...(options.searchProfiles
         ? { searchProfiles: options.searchProfiles }
+        : {}),
+      ...(options.verifiedProfiles
+        ? { verifiedProfiles: options.verifiedProfiles }
         : {}),
       readAgentLibrary,
       writer: {
@@ -1114,6 +1120,129 @@ it("keeps relay-only matches after shared-ranked names without duplicating rows"
     expect.stringMatching(/^Add Robin/),
     expect.stringMatching(/^Add A different name/),
   ]);
+});
+
+it.each(["name", "npub"] as const)(
+  "finds a verified person who has no kind:0 by their verified %s and adds them",
+  async (by) => {
+    const relay = keypair(),
+      gabi = keypair();
+    const head = signed(relay, {
+      kind: 30382,
+      created_at: 1_000_000,
+      content: "",
+      tags: [
+        ["d", gabi.pubkey],
+        ["p", gabi.pubkey],
+        ["active", "true"],
+        ["display_name", "glilienfeld"],
+        ["username", "glilienfeld"],
+        ["full_name", "Gabi Lilienfeld"],
+        ["issuer_label", "Example"],
+        ["verified_at", "1000000"],
+      ],
+    });
+    const t = await setup("stream", false, false, undefined, undefined, {
+      relay,
+      searchProfiles: async () => [eventDto(head)],
+      verifiedProfiles: {
+        pubkey: relay.pubkey,
+        multipleIssuers: false,
+        searchable: true,
+      },
+    });
+    // A pasted key reads no kind:0; the verified name comes from a head read.
+    const query = t.query.getMockImplementation();
+    if (!query) throw new Error("Missing query fixture");
+    t.query.mockImplementation(async (filters) =>
+      filters.some((filter) => filter.kinds?.includes(30382))
+        ? [eventDto(head)]
+        : query(filters),
+    );
+    await t.user.type(
+      screen.getByRole("searchbox"),
+      by === "name" ? "gabi" : npubEncode(gabi.pubkey),
+    );
+    await t.user.click(
+      await screen.findByRole("button", { name: /^Add glilienfeld/ }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        t.publish.mock.calls.some(([event]) =>
+          event.tags.some((tag) => tag[0] === "p" && tag[1] === gabi.pubkey),
+        ),
+      ).toBe(true),
+    );
+  },
+);
+
+it("names a pasted key once a later search returns its new verified head", async () => {
+  const relay = keypair(),
+    gabi = keypair();
+  const head = signed(relay, {
+    kind: 30382,
+    created_at: 1_000_000,
+    content: "",
+    tags: [
+      ["d", gabi.pubkey],
+      ["p", gabi.pubkey],
+      ["active", "true"],
+      ["display_name", "glilienfeld"],
+      ["username", "glilienfeld"],
+      ["full_name", "Gabi Lilienfeld"],
+      ["issuer_label", "Example"],
+      ["verified_at", "1000000"],
+    ],
+  });
+  // Neither a kind:0 nor a head exists yet; the head is published later.
+  let published = false;
+  const t = await setup("stream", false, false, undefined, undefined, {
+    relay,
+    searchProfiles: async () => (published ? [eventDto(head)] : []),
+    verifiedProfiles: {
+      pubkey: relay.pubkey,
+      multipleIssuers: false,
+      searchable: true,
+    },
+  });
+  const query = t.query.getMockImplementation();
+  if (!query) throw new Error("Missing query fixture");
+  t.query.mockImplementation(async (filters) =>
+    filters.some((filter) => filter.kinds?.includes(30382))
+      ? published
+        ? [eventDto(head)]
+        : []
+      : query(filters),
+  );
+  const search = screen.getByRole("searchbox");
+  await t.user.type(search, npubEncode(gabi.pubkey));
+  // The missing-head lookup finishes: the row keeps its key label.
+  const label = new RegExp(`^Add ${gabi.pubkey.slice(0, 10)}`);
+  await screen.findByRole("button", { name: label });
+  await vi.waitFor(() =>
+    expect(
+      t.query.mock.calls.some(([filters]) =>
+        filters.some(
+          (filter) =>
+            filter.kinds?.includes(30382) &&
+            filter["#d"]?.includes(gabi.pubkey),
+        ),
+      ),
+    ).toBe(true),
+  );
+  published = true;
+  await t.user.clear(search);
+  await t.user.type(search, "gabi");
+  await t.user.click(
+    await screen.findByRole("button", { name: /^Add glilienfeld/ }),
+  );
+  await vi.waitFor(() =>
+    expect(
+      t.publish.mock.calls.some(([event]) =>
+        event.tags.some((tag) => tag[0] === "p" && tag[1] === gabi.pubkey),
+      ),
+    ).toBe(true),
+  );
 });
 
 it("starts every invitation group at four and expands only the selected group", async () => {
