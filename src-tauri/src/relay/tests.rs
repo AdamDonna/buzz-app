@@ -2626,6 +2626,43 @@ async fn truncated_whole_videos_fail_and_are_fetched_again() {
 }
 
 #[tokio::test]
+async fn a_failed_spool_still_answers_the_bytes_it_wrote() {
+    let _serial = SPOOL_TESTS.lock().await;
+    let block = media_blocks::BLOCK;
+    let blob = media_blob(2 * block);
+    let length = 3 * block;
+    let (base, _, _) = whole_media_server(blob.clone(), Some(length), Duration::ZERO);
+    let url = base
+        .join(&format!("/media/{}.mp4", "b".repeat(64)))
+        .unwrap();
+    let upstream = reqwest::Client::new()
+        .get(url.clone())
+        .header("Range", "bytes=0-")
+        .send()
+        .await
+        .unwrap();
+    let spool = media_spool::open(&url, upstream, WHOLE_VIDEO_MAX)
+        .await
+        .unwrap();
+    // The tail never arrives, so this returns only once the copy has failed.
+    assert_eq!(
+        media_spool::read(spool.clone(), length - 4, length - 1)
+            .await
+            .unwrap_err(),
+        502
+    );
+    // A read that starts after the failure, and so never sees the copy's
+    // progress, still gets the bytes written before it.
+    let first = media_spool::read(spool, 0, block - 1).await.unwrap();
+    assert_eq!(first.body(), &blob[..block as usize]);
+    assert_eq!(
+        first.headers()["content-range"],
+        format!("bytes 0-{}/{length}", block - 1)
+    );
+    spool_files_deleted().await;
+}
+
+#[tokio::test]
 async fn abandoned_whole_video_downloads_stop_and_delete_their_file() {
     let _serial = SPOOL_TESTS.lock().await;
     let blob = media_blob(16 * media_blocks::BLOCK);
