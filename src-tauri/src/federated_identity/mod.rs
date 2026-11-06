@@ -442,6 +442,10 @@ impl FederatedIdentity {
             }
         });
     }
+    /// This server's descriptor, signed in or not.
+    pub(crate) fn config(&self) -> Option<&Config> {
+        self.0.config.as_ref()
+    }
     /// Lend the current session token to `use_session` without letting it escape.
     #[allow(dead_code)] // Consumed by the agent token client.
     pub(crate) fn with_session<T>(

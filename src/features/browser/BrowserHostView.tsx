@@ -501,6 +501,10 @@ export function BrowserHostView({
         <div ref={errorBar} className={styles.error} role="alert" tabIndex={-1}>
           {error}
         </div>
+      ) : status.notice ? (
+        <div className={styles.notice} role="status">
+          {status.notice}
+        </div>
       ) : null}
       <div className={styles.viewport} ref={viewport}>
         {page === "denied" ? (

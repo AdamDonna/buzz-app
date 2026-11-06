@@ -442,6 +442,10 @@ revokes all of them, and a pairing unused for 30 days expires.
 - **Link boundaries**: a bare http(s) or buzz link ends at whitespace and at
   fullwidth, CJK or curly-quote punctuation such as `，`, `。`, `」` or `’`. In a
   host name, `。` works as a dot. Wrap it as `<url>` to keep them in it.
+- **Approving a Builderlab tool app**: the first time a tool app asks for
+  approval, Buzz opens the approval page in your default browser, where you
+  are signed in to Builderlab. Approve it there, return to Buzz and click
+  **Reload** to open the app.
 - **Drafts & sent** lists the messages you started but did not send, newest
   change first, with the number of drafts shown beside it in the Messages
   sidebar, and your latest 100 sent messages in this community, grouped by

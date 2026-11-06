@@ -992,6 +992,29 @@ it("shows a synchronous address validation error", async () => {
   );
 });
 
+it("shows a step to take elsewhere as a status, not an error", async () => {
+  const platform = fakePlatform();
+  vi.mocked(platform.status).mockResolvedValue({
+    url: "https://example.com/",
+    title: "",
+    loading: false,
+    error: null,
+    notice: "Approve this app in your web browser, then select Reload",
+  });
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={5}
+    />,
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Approve this app in your web browser, then select Reload",
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 it("ignores status from a replaced session", async () => {
   const oldStatus = deferred<{
     url: string;

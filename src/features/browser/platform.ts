@@ -56,6 +56,8 @@ export type BrowserStatus = Readonly<{
   title: string;
   loading: boolean;
   error: string | null;
+  /** A step to take elsewhere, such as approving an app in the web browser. */
+  notice?: string | null;
 }>;
 
 export type BrowserAction = "back" | "forward" | "reload";

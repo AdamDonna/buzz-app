@@ -114,7 +114,7 @@ pub(super) struct Bootstrap {
     pub cookie_domain: String,
 }
 
-fn app_root(domain: &str, target: &str) -> Result<String, String> {
+pub(super) fn app_root(domain: &str, target: &str) -> Result<String, String> {
     if domain.is_empty() {
         return Err("Builderlab Apps sign-in is not configured".into());
     }
