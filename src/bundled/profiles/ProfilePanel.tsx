@@ -5,6 +5,10 @@ import {
   profileHistoryTarget,
 } from "../../features/profiles/target";
 import { useProfileMessage } from "../../features/profiles/useProfileMessage";
+import {
+  otherVerifiedName,
+  verifiedLabel,
+} from "../../features/profiles/name-preference";
 import { AgentDetails } from "../agents/AgentDetails";
 import { AgentMessageButton } from "../agents/AgentMessageButton";
 import { useAgents } from "../../features/agents/react";
@@ -444,6 +448,12 @@ function ProfileDetails({
     profile?.name ??
       (displayAgent ? "Unknown agent" : (formatPublicKey(pubkey) ?? pubkey)),
   );
+  // The verification line carries the check, so it keeps the handle when the
+  // name already is it.
+  const otherName =
+    profile?.verified &&
+    (otherVerifiedName(verifiedLabel(profile.verified), profile.verified) ??
+      `@${profile.verified.username}`);
   // The portrait is 5rem (at most 240 device px), so the relay's 320 px
   // thumbnail already covers it and reuses the URL message rows have loaded.
   const picture = avatarMedia(profile?.picture, session.media) ?? null;
@@ -529,9 +539,7 @@ function ProfileDetails({
               <p
                 className={`${styles.verifiedName} text-body-sm text-secondary`}
               >
-                <span>
-                  {profile.verified.fullName ?? `@${profile.verified.username}`}
-                </span>
+                <span>{otherName}</span>
                 {profile.verified.status === "checked" && (
                   <CheckCircleIcon
                     aria-hidden="true"
@@ -545,7 +553,8 @@ function ProfileDetails({
                 {profile.verified.status === "checked"
                   ? `Name verified by ${profile.verified.issuerLabel}`
                   : `Cached verification from ${profile.verified.issuerLabel}`}{" "}
-                {profile.verified.fullName && `· @${profile.verified.username}`}
+                {otherName !== `@${profile.verified.username}` &&
+                  `· @${profile.verified.username}`}
               </p>
             )}
             {presence !== "unknown" && (

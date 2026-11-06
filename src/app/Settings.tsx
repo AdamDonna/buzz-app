@@ -1258,6 +1258,7 @@ export function Settings({
           <AppearanceSettings
             appearance={appearance}
             active={selected === "appearance"}
+            communities={communities}
           />
         </div>
         <div hidden={selected !== "shortcuts"}>

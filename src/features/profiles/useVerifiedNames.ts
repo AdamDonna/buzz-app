@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { PROFILE_CACHE_BASE } from "../relay/budget";
 import type { ProfileQueries } from "../relay/profile-directory";
+import {
+  type NamePreference,
+  namePreference,
+  verifiedLabel,
+} from "./name-preference";
 import type { RelaySession } from "../relay/session";
 import type {
   VerifiedProfile,
@@ -190,6 +195,7 @@ export function withVerifiedNames<
   people: readonly T[],
   page: ReadonlyMap<string, VerifiedProfile>,
   shared: ReadonlyMap<string, { verified?: VerifiedProfile | undefined }>,
+  preference: NamePreference = namePreference(),
 ): readonly VerifiedPerson<T>[] {
   let changed = false;
   const named = people.map((person): VerifiedPerson<T> => {
@@ -199,7 +205,7 @@ export function withVerifiedNames<
     changed = true;
     return {
       ...person,
-      name: verified.displayName,
+      name: verifiedLabel(verified, preference),
       username: verified.username,
       ...(verified.fullName ? { fullName: verified.fullName } : {}),
       profileNames: [person.name, person.username].filter(

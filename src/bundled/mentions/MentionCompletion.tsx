@@ -217,15 +217,15 @@ export function MentionCompletion({
           label,
           elsewhere,
           disabled,
-          fullName,
+          otherName,
           agent,
           execution,
         }) => {
           const detail =
             disabled ??
-            // A verified full name sits beside the detail.
+            // The other verified name sits beside the detail.
             ([
-              fullName !== label ? fullName : undefined,
+              otherName,
               remoteMentionDetail(execution),
               model.managedBy.get(recipient.pubkey),
               memberKeys.has(recipient.pubkey)

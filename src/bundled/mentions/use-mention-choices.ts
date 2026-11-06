@@ -1,3 +1,4 @@
+import { useNamePreference } from "../../features/profiles/name-preference";
 import { useMentionDirectory } from "./useMentionDirectory";
 import { useMentionArchives } from "../../features/messages/use-mention-archives";
 import {
@@ -85,14 +86,25 @@ function page(session: ComposerSession, people: readonly Person[]) {
   const key = JSON.stringify(
     [...people]
       .sort((a, b) => (a.pubkey < b.pubkey ? -1 : a.pubkey > b.pubkey ? 1 : 0))
-      .map(({ pubkey, name, isAgent, fullName, profileNames, ownerPubkey }) => [
-        pubkey,
-        name,
-        !!isAgent,
-        fullName ?? "",
-        profileNames ?? [],
-        ownerPubkey,
-      ]),
+      .map(
+        ({
+          pubkey,
+          name,
+          isAgent,
+          username,
+          fullName,
+          profileNames,
+          ownerPubkey,
+        }) => [
+          pubkey,
+          name,
+          !!isAgent,
+          username ?? "",
+          fullName ?? "",
+          profileNames ?? [],
+          ownerPubkey,
+        ],
+      ),
   );
   const seen = pages.get(session) ?? new Map<string, readonly Person[]>();
   pages.set(session, seen);
@@ -303,9 +315,10 @@ export function useMentionChoices(
     key: query,
     settled: !directory.loading,
   });
+  const preference = useNamePreference();
   const searched = useMemo(
-    () => withVerifiedNames(directory.people, verified, profiles),
-    [directory.people, verified, profiles],
+    () => withVerifiedNames(directory.people, verified, profiles, preference),
+    [directory.people, verified, profiles, preference],
   );
   const people = useMemo(() => {
     if (!carried.length) return searched;

@@ -51,7 +51,7 @@ import type { ChannelMessage, Profile } from "../relay/contracts";
 import { emojiMatches, linkPart, messageParts } from "../relay/emoji";
 import { safeLinkUrl, visibleHtmlSource } from "../relay/message-content";
 import styles from "./Messages.module.css";
-import { profileMentionParts } from "./profile-mentions";
+import { profileMentionNames, profileMentionParts } from "./profile-mentions";
 import {
   isLiteralMarkdownContext,
   prepareMarkdown,
@@ -236,7 +236,10 @@ function inlineProtectionKey(
   agents: typeof emptyReferenceDirectory.agents,
 ) {
   const identities = [...row.mentions, ...(row.mentionReferences ?? [])];
-  const mentions = identities.map((id) => [id, profiles?.get(id)?.name]);
+  const mentions = identities.map((id) => [
+    id,
+    ...profileMentionNames(profiles?.get(id)),
+  ]);
   const mentioned = new Set(identities);
   const agentNames = agents
     .filter((agent) => mentioned.has(agent.pubkey))

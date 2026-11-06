@@ -1,6 +1,10 @@
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { ComposerSession } from "../../features/messages/composer-session";
 import type { MentionRecipient } from "../../features/messages/mention-draft";
+import {
+  otherVerifiedName,
+  verifiedLabel,
+} from "../../features/profiles/name-preference";
 import { knownAgentPubkeys } from "../../features/agents/known";
 import type { Agent } from "../../features/agents/service";
 import { communityHost } from "../../features/messages/community-host";
@@ -58,6 +62,8 @@ type DirectoryPerson = MentionRecipient & {
   isAgent?: true;
   /** A community-verified full name (useVerifiedNames). */
   fullName?: string | undefined;
+  /** A community-verified username (useVerifiedNames). */
+  username?: string | undefined;
   /** The profile name and handle a verified person was found by. */
   profileNames?: readonly string[] | undefined;
   /** Self-declared, for naming only; never shown as a manager. */
@@ -260,14 +266,19 @@ function buildCandidates(
     .filter((p) => admits(p.pubkey))
     .map((recipient) => {
       const execution = executions.get(recipient.pubkey);
-      const fullName =
-        profiles.get(recipient.pubkey)?.verified?.fullName ??
-        verified.get(recipient.pubkey)?.fullName;
+      const shared = profiles.get(recipient.pubkey)?.verified;
+      const searched = verified.get(recipient.pubkey);
+      const fullName = shared?.fullName ?? searched?.fullName;
+      const username = shared?.username ?? searched?.username;
+      // A searched person's name already is their verified label.
+      const otherName = shared
+        ? otherVerifiedName(verifiedLabel(shared), shared)
+        : searched && otherVerifiedName(searched.name, searched);
       return {
         recipient,
         ...(execution ? { execution } : {}),
-        /** A community-verified full name, shown beside the row's detail. */
-        ...(fullName ? { fullName } : {}),
+        /** The verified name the label is not, shown beside the row's detail. */
+        ...(otherName ? { otherName } : {}),
         member: memberKeys.has(recipient.pubkey),
         /** The host of the owner's other community this agent is in. */
         ...(hosts.has(recipient.pubkey)
@@ -290,7 +301,8 @@ function buildCandidates(
               ...(agentNames.get(recipient.pubkey) ?? []),
               hosts.has(recipient.pubkey) ? recipient.name : undefined,
               fullName,
-              ...(verified.get(recipient.pubkey)?.profileNames ?? []),
+              username,
+              ...(searched?.profileNames ?? []),
             ].filter((name): name is string => !!name),
           ),
         ],

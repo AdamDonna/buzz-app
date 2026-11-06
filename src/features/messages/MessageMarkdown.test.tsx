@@ -39,7 +39,7 @@ import {
   safeLinkUrl,
   safeMessageUrl,
 } from "../relay/message-content";
-import type { ChannelMessage } from "../relay/contracts";
+import type { ChannelMessage, Profile } from "../relay/contracts";
 
 const markdownRenders = vi.hoisted(() => vi.fn());
 vi.mock("react-markdown", async (importOriginal) => {
@@ -553,6 +553,33 @@ describe("mounted Markdown preparation", () => {
 });
 
 describe("Markdown profile mentions", () => {
+  it("rebinds mounted prose when a verified alias changes under the same name", () => {
+    const person = (fullName: string) =>
+      new Map([
+        [
+          mic,
+          {
+            name: "reader",
+            verified: { displayName: "reader", fullName },
+          } as Profile,
+        ],
+      ]);
+    const initial = props("@Reader Example and @Reader Updated", {
+      participantProfiles: person("Reader Example"),
+    });
+    const view = renderDom(<MessageMarkdown {...initial} />);
+    const bound = () =>
+      screen.queryAllByRole("button").map((button) => button.textContent);
+    expect(bound()).toEqual(["Reader Example"]);
+    view.rerender(
+      <MessageMarkdown
+        {...initial}
+        participantProfiles={person("Reader Updated")}
+      />,
+    );
+    expect(bound()).toEqual(["Reader Updated"]);
+  });
+
   it("binds exact signed names longest-first through surrounding emphasis", () => {
     const html = render("**@Mic Smith**, _@Mic_! @Other @Missing @Microscopic");
     expect(html).toContain("<strong><button");

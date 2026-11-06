@@ -43,21 +43,45 @@ import {
   setClockPreference,
   useClockPreference,
 } from "../shared/clock-preference";
+import {
+  setNamePreference,
+  useNamePreference,
+} from "../features/profiles/name-preference";
+import type { Communities } from "../features/communities/service";
+
+const noRelay = () => () => {};
+/** Whether the connected community verifies people's names, so there is a
+ * username and a full name to choose between. */
+function useVerifiedCommunity(relay: Communities["relay"] | undefined) {
+  const connection = useSyncExternalStore(relay?.subscribe ?? noRelay, () =>
+    relay?.snapshot(),
+  );
+  const profiles =
+    connection?.status === "ready" ? connection.session.profiles : undefined;
+  return useSyncExternalStore(
+    profiles?.subscribe ?? noRelay,
+    () => !!profiles?.verifiedAuthority?.(),
+  );
+}
 
 export function AppearanceSettings({
   appearance,
   active = true,
   autocorrectAvailable = macWebKit(),
+  communities,
 }: {
   appearance: Appearance;
   active?: boolean;
   /** Only Mac WebKit applies the composer's autocorrect attribute. */
   autocorrectAvailable?: boolean;
+  communities?: Pick<Communities, "relay"> | undefined;
 }) {
   const followUp = useFollowUpBehaviorPreference();
   const autocorrect = useMessageAutocorrectPreference();
   const unreadFirst = useUnreadFirstPreference();
   const clock = useClockPreference();
+  const names = useNamePreference();
+  const verifiedCommunity = useVerifiedCommunity(communities?.relay);
   const { placement, unsaved } = useThreadPlacementPreference();
   const increaseButton = useRef<HTMLButtonElement>(null);
   const pendingFocus = useRef<HTMLButtonElement | null>(null);
@@ -305,6 +329,32 @@ export function AppearanceSettings({
       <div className="mt-section-gap">
         <InlineHeader title="Conversations" />
         <SettingsGroup>
+          {verifiedCommunity && (
+            <PreferenceRow
+              title="Show people by"
+              subtitle="How people with verified names appear to you. Search, profiles, and previews show both."
+              trailing={
+                <Select
+                  variant="compact"
+                  label="Show people by"
+                  value={names}
+                  groups={[
+                    {
+                      label: "Name",
+                      options: [
+                        { value: "username", label: "Username" },
+                        { value: "full-name", label: "Full name" },
+                      ],
+                    },
+                  ]}
+                  onValueChange={(value) => {
+                    if (value === "username" || value === "full-name")
+                      setNamePreference(value);
+                  }}
+                />
+              }
+            />
+          )}
           <PreferenceRow
             title="Message density"
             subtitle="Compact shows conversations as a flat list that fits more messages on screen."

@@ -392,7 +392,7 @@ export function MentionPicker({
                   agent,
                   elsewhere,
                   disabled: reason,
-                  fullName,
+                  otherName,
                   execution,
                 }) => {
                   const managedBy = model.managedBy.get(recipient.pubkey);
@@ -439,13 +439,13 @@ export function MentionPicker({
                           </span>
                           {reason && <small>{reason}</small>}
                           {(remoteDetail ||
-                            (fullName && fullName !== label) ||
+                            otherName ||
                             managedBy ||
                             !members?.includes(recipient.pubkey)) && (
                             <small className="text-caption text-subtle">
-                              {/* A verified full name sits beside the detail. */}
+                              {/* The other verified name sits beside the detail. */}
                               {[
-                                fullName !== label ? fullName : undefined,
+                                otherName,
                                 remoteDetail,
                                 managedBy,
                                 members?.includes(recipient.pubkey)
