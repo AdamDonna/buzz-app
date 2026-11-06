@@ -282,6 +282,112 @@ function visibilityFixture() {
   return { f, read, lifecycle };
 }
 
+it.each(["messages", "manual", "threads"] as const)(
+  "shows live %s evidence on the collapsed Direct messages header",
+  async (source) => {
+    const user = userEvent.setup();
+    let muted: string[] = [];
+    const preferences = createSidebarPreferencesStore({
+      available: true,
+      read: async () => ({ sections: [], assignments: {}, starred: [], muted }),
+    });
+    await preferences.queries.ensure();
+    const f = fixture(preferences.queries, "ready", [
+      { id: "alpha", name: "alpha", channelType: "stream" },
+      { id: "dm", name: "A friend", channelType: "dm" },
+    ]);
+    const original = f.session.unread;
+    let dmUnread = {
+      ...original.snapshot({ kind: "channel", channelId: "dm" }),
+      observedCount: 0,
+    };
+    let dmActivity = original.activity("dm");
+    const listeners = new Set<() => void>();
+    f.session.unread = {
+      ...original,
+      snapshot: (target) =>
+        target.channelId === "dm" ? dmUnread : original.snapshot(target),
+      subscribe: (_target, listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      activity: (id) => (id === "dm" ? dmActivity : original.activity(id)),
+      subscribeActivity: (_id, listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const update = (next: number) =>
+      act(() => {
+        dmUnread = {
+          ...dmUnread,
+          observedCount: source === "messages" ? next : 0,
+          manual: source === "manual" && next > 0 ? "local-only" : "none",
+        };
+        dmActivity = {
+          ...dmActivity,
+          items:
+            source === "threads" && next > 0
+              ? [
+                  {
+                    channelId: "dm",
+                    rootId: "thread",
+                    latestMessageId: "reply",
+                    authorId: "b".repeat(64),
+                    createdAt: 1,
+                    preview: "Reply",
+                    unreadCount: next,
+                  },
+                ]
+              : [],
+        };
+        for (const listener of listeners) listener();
+      });
+    const rendered = render(f.view("alpha"));
+    const header = await screen.findByLabelText("Direct messages");
+    await user.click(header);
+    expect(header.closest("details")).not.toHaveAttribute("open");
+    expect(
+      within(header).queryByRole("img", { name: "Unread direct messages" }),
+    ).toBeNull();
+    update(2);
+    expect(header).toHaveAccessibleDescription("Unread direct messages");
+    expect(
+      within(header).getByRole("img", { name: "Unread direct messages" }),
+    ).toBeVisible();
+    muted = ["dm"];
+    await act(() => preferences.queries.refresh());
+    expect(
+      within(header).queryByRole("img", { name: "Unread direct messages" }),
+    ).toBeNull();
+    muted = [];
+    await act(() => preferences.queries.refresh());
+    expect(
+      within(header).getByRole("img", { name: "Unread direct messages" }),
+    ).toBeVisible();
+    await user.click(header);
+    expect(
+      within(header).queryByRole("img", { name: "Unread direct messages" }),
+    ).toBeNull();
+    await user.click(header);
+    expect(
+      within(header).getByRole("img", { name: "Unread direct messages" }),
+    ).toBeVisible();
+    update(0);
+    expect(
+      within(header).queryByRole("img", { name: "Unread direct messages" }),
+    ).toBeNull();
+    update(1);
+    f.drop("dm");
+    expect(
+      within(header).queryByRole("img", { name: "Unread direct messages" }),
+    ).toBeNull();
+    rendered.unmount();
+    preferences.dispose();
+    expect(listeners.size).toBe(0);
+  },
+);
+
 it("keeps visibility recovery quiet, then offers the existing retry after exhaustion", async () => {
   vi.useFakeTimers();
   const random = vi.spyOn(Math, "random").mockReturnValue(0.5);

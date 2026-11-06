@@ -8,6 +8,39 @@ import {
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import styles from "./Channels.module.css";
+import { useUnreadChannelIds } from "./useSidebarFilters";
+
+/** Keep hidden DM backlog discoverable without claiming an exact message total. */
+export function CollapsedDmUnread({
+  session,
+  channelIds,
+}: {
+  session: RelaySession;
+  channelIds: readonly string[];
+}) {
+  const preferences = useSyncExternalStore(
+    session.sidebarPreferences.subscribe,
+    session.sidebarPreferences.snapshot,
+    session.sidebarPreferences.snapshot,
+  );
+  const unreadIds = useUnreadChannelIds(
+    session.unread,
+    JSON.stringify(channelIds),
+  );
+  const muted = preferences.cached ? [] : (preferences.data?.muted ?? []);
+  if (!channelIds.some((id) => unreadIds.has(id) && !muted.includes(id)))
+    return null;
+  return (
+    <span
+      className={styles.priorityDot}
+      role="img"
+      aria-label="Unread direct messages"
+      title="Unread direct messages"
+    >
+      <span className="sr-only">Unread direct messages</span>
+    </span>
+  );
+}
 
 type UnreadSnapshot = ReturnType<RelaySession["unread"]["snapshot"]>;
 

@@ -71,6 +71,66 @@ const heads = (app) =>
     ({ filter }) => filter.kinds?.includes(9) && filter["#h"]?.length === 1,
   );
 
+// Real layout and native summary keyboard activation cannot be proven in jsdom.
+test("collapsed DM header keeps its unread dot visible and expands with the keyboard", async ({
+  page,
+  app,
+}, info) => {
+  await open(page, app);
+  await expect(
+    row(page, "dm-030").locator("[data-channel-unread]"),
+  ).toBeAttached();
+  const header = list(page).locator('summary[aria-label="Direct messages"]');
+  await header.click();
+  const dot = header.getByRole("img", { name: "Unread direct messages" });
+  for (const mode of ["light", "dark"]) {
+    for (const width of [300, 440]) {
+      await page.evaluate(
+        ({ mode, width }) => {
+          localStorage.setItem("buzz-appearance.v1", mode);
+          localStorage.setItem("buzz-font-scale.v1", "1.5");
+          window.dispatchEvent(
+            new StorageEvent("storage", {
+              key: null,
+              storageArea: localStorage,
+            }),
+          );
+          document.querySelector(".shell-sidebar").style.width = `${width}px`;
+        },
+        { mode, width },
+      );
+      await expect(page.locator("html")).toHaveAttribute(
+        "data-color-mode",
+        mode,
+      );
+      await expect(dot).toBeVisible();
+      await expect(row(page, "dm-030")).toBeHidden();
+      await expect
+        .poll(() =>
+          dot.evaluate((element) => {
+            const dot = element.getBoundingClientRect();
+            const header = element.closest("summary").getBoundingClientRect();
+            return (
+              dot.width > 0 &&
+              dot.left >= header.left &&
+              dot.right <= header.right &&
+              dot.top >= header.top &&
+              dot.bottom <= header.bottom
+            );
+          }),
+        )
+        .toBe(true);
+      await header.screenshot({
+        path: info.outputPath(`collapsed-dm-${mode}-${width}.png`),
+      });
+    }
+  }
+  await header.focus();
+  await page.keyboard.press("Enter");
+  await expect(dot).toHaveCount(0);
+  await expect(row(page, "dm-030")).toBeVisible();
+});
+
 test("DM hide control removes a row and a new message restores it", async ({
   page,
   app,
