@@ -49,6 +49,9 @@ account-isolated guest opens through browser login. Other errors stay closed.
 A 401 from the exchange also asks the sign-in adapter's session route once, as
 other granted calls do. Only when the adapter confirms the session ended does the
 shared NIP-FI session move to reauthentication required, so Settings matches.
+When the exchange refuses the viewer (403), the panel shows **You can’t open this
+app** with **Try again** in place of the website instead of the error bar. It
+gives no reason for the refusal.
 The guest stays blank until installation or this fallback finishes and its account lifetime is checked. No
 credential or generic cookie/header capability is exposed to the guest. Each
 account selects its own storage, kept across sign-ins and restarts so a browser

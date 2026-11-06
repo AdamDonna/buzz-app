@@ -1,7 +1,7 @@
 //! Native-only viewer exchange. Credentials never enter a URL or website JavaScript.
 use crate::federated_identity::FederatedIdentity;
 use reqwest::header::{HeaderName, HeaderValue};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 use zeroize::Zeroizing;
@@ -47,6 +47,35 @@ impl TryFrom<RawViewerAuth> for ViewerAuth {
         raw.federated
             .map(Self::Federated)
             .ok_or("expected a federated session revision")
+    }
+}
+
+/// Why an app could not be opened. `page` names a refusal the panel explains
+/// with its own page instead of the message alone.
+#[derive(Debug, Serialize)]
+pub struct ViewerError {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<ViewerPage>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ViewerPage {
+    /// Kgoose refused this viewer. Like its own page, give no reason: an
+    /// unknown or deleted app looks the same as one without access.
+    Denied,
+}
+impl From<String> for ViewerError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            page: None,
+        }
+    }
+}
+impl From<&str> for ViewerError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
     }
 }
 
@@ -138,19 +167,24 @@ fn cookie(
 }
 
 /// Only feature absence permits browser-login fallback. All authorization and transport failures stay closed.
-fn exchange_available(status: reqwest::StatusCode, federated: bool) -> Result<bool, String> {
+fn exchange_available(status: reqwest::StatusCode, federated: bool) -> Result<bool, ViewerError> {
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(false);
     }
     if status.is_success() {
         return Ok(true);
     }
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err(ViewerError {
+            message: "Your Builderlab account cannot open this app".into(),
+            page: Some(ViewerPage::Denied),
+        });
+    }
     Err(match status.as_u16() {
         401 if federated => {
             "Sign in again in Settings → Identity → Organization sign-in, then reopen this app"
         }
         401 => "Sign out and sign in to Builderlab again in Settings, then reopen this app",
-        403 => "Your Builderlab account cannot open this app",
         _ => "Builderlab viewer sign-in is unavailable. Try reopening this app",
     }
     .into())
@@ -205,7 +239,7 @@ pub(super) async fn prepare(
     target: &str,
     auth: ViewerAuth,
     fi: &FederatedIdentity,
-) -> Result<Option<Bootstrap>, String> {
+) -> Result<Option<Bootstrap>, ViewerError> {
     let domain = buzzodz_plugins::BUILDERLAB_APPS_DOMAIN;
     if domain.is_empty() {
         return Ok(None);
@@ -401,10 +435,41 @@ mod tests {
         let unauthorized = reqwest::StatusCode::UNAUTHORIZED;
         assert!(exchange_available(unauthorized, true)
             .unwrap_err()
+            .message
             .contains("Identity → Organization sign-in"));
         assert!(exchange_available(unauthorized, false)
             .unwrap_err()
+            .message
             .contains("sign in to Builderlab again"));
+    }
+
+    #[test]
+    fn only_a_viewer_refusal_gets_the_denied_page_without_a_reason() {
+        for federated in [false, true] {
+            for code in [400, 401, 403, 429, 500, 503, 302] {
+                let status = reqwest::StatusCode::from_u16(code).unwrap();
+                let error = exchange_available(status, federated).unwrap_err();
+                assert_eq!(
+                    error.page,
+                    (code == 403).then_some(ViewerPage::Denied),
+                    "{code}"
+                );
+            }
+        }
+        let denied = exchange_available(reqwest::StatusCode::FORBIDDEN, true).unwrap_err();
+        assert_eq!(
+            serde_json::to_value(&denied).unwrap(),
+            serde_json::json!({
+                "message": "Your Builderlab account cannot open this app",
+                "page": "denied",
+            })
+        );
+        // Other failures carry only their message.
+        let other = ViewerError::from("Builderlab sign-in request failed");
+        assert_eq!(
+            serde_json::to_value(&other).unwrap(),
+            serde_json::json!({ "message": "Builderlab sign-in request failed" })
+        );
     }
 
     #[test]

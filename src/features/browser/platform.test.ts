@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addressInputUrl,
+  BrowserAttachError,
   createBrowserPlatform,
   validateBrowsableUrl,
 } from "./platform";
@@ -204,6 +205,38 @@ describe("createBrowserPlatform", () => {
         builderlab: { federated: "revision-1" },
       },
     ]);
+  });
+
+  it("turns a structured native attach refusal into an error naming its page", async () => {
+    const bounds = { x: 0, y: 0, width: 1, height: 1 };
+    const attach = (rejection: unknown) => {
+      sdk.invoke.mockRejectedValueOnce(rejection as never);
+      return createBrowserPlatform().attach("https://example.com", bounds);
+    };
+    const denied = await attach({
+      message: "Your Builderlab account cannot open this app",
+      page: "denied",
+    }).catch((error: unknown) => error);
+    expect(denied).toBeInstanceOf(BrowserAttachError);
+    expect(denied).toMatchObject({
+      message: "Your Builderlab account cannot open this app",
+      page: "denied",
+    });
+
+    const plain = await attach({
+      message: "Builderlab sign-in request failed",
+    }).catch((error: unknown) => error);
+    expect(plain).toBeInstanceOf(BrowserAttachError);
+    expect((plain as BrowserAttachError).page).toBeUndefined();
+
+    const unknownPage = await attach({ message: "x", page: "elsewhere" }).catch(
+      (error: unknown) => error,
+    );
+    expect((unknownPage as BrowserAttachError).page).toBeUndefined();
+
+    await expect(attach("Browser session is closed")).rejects.toBe(
+      "Browser session is closed",
+    );
   });
 
   it("rejects an invalid URL before native invocation", async () => {

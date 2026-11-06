@@ -84,6 +84,36 @@ export interface BrowserPlatform {
   detach(sessionId: string): Promise<void>;
 }
 
+/** A page the browser view shows in place of the website when attach fails. */
+export type BrowserViewerPage = "denied";
+
+/** An attach failure. `page` names a panel page to show instead of the error bar. */
+export class BrowserAttachError extends Error {
+  constructor(
+    message: string,
+    readonly page?: BrowserViewerPage,
+  ) {
+    super(message);
+    this.name = "BrowserAttachError";
+  }
+}
+
+const VIEWER_PAGES: readonly string[] = ["denied"];
+
+// Native attach rejects with `{ message, page? }`; older paths reject with a string.
+function attachError(error: unknown): unknown {
+  if (typeof error !== "object" || error === null || error instanceof Error)
+    return error;
+  const { message, page } = error as { message?: unknown; page?: unknown };
+  if (typeof message !== "string") return error;
+  return new BrowserAttachError(
+    message,
+    typeof page === "string" && VIEWER_PAGES.includes(page)
+      ? (page as BrowserViewerPage)
+      : undefined,
+  );
+}
+
 function normalizedUrl(url: string): string {
   const validation = validateBrowsableUrl(url);
   if (!validation.ok) throw new Error(validation.reason);
@@ -111,6 +141,8 @@ export function createBrowserPlatform(): BrowserPlatform {
             ? { broker: builderlab.broker }
             : { federated: builderlab.federated }
           : null,
+      }).catch((error: unknown) => {
+        throw attachError(error);
       });
       if (builderlab) {
         const close = () => {
