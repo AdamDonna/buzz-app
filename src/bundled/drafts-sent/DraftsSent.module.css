@@ -194,6 +194,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Beside the row, not inside its button: clearing never opens the draft. */
+.clear {
+  flex: none;
+  align-self: center;
+}
+
 .badge {
   color: var(--text-navigation-unread);
   font-weight: var(--type-weight-semibold);

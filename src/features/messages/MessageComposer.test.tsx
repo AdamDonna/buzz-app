@@ -83,6 +83,7 @@ import type {
   Profile,
 } from "../relay/contracts";
 import { readView, viewRevision, writeView } from "../../shared/view-state";
+import { clearDraft } from "../../bundled/drafts-sent/drafts";
 import { followupDraft } from "./mention-draft";
 import { emojiMatches, type CustomEmoji } from "../relay/emoji";
 import { CustomEmoji as CustomEmojiImage } from "../../bundled/emoji/CustomEmoji";
@@ -11341,6 +11342,20 @@ it.each([false, true])(
     expect(h.input()).toHaveValue("Newer saved work");
   },
 );
+
+it("empties for a draft cleared elsewhere, and a stale composer never restores it", () => {
+  writeView("scope", "draft:channel", "Saved draft");
+  const h = mount();
+  expect(h.input()).toHaveValue("Saved draft");
+  act(() => clearDraft({ scope: "scope" }, "draft:channel"));
+  expect(h.input()).toHaveValue("");
+
+  h.fill("Edited here");
+  act(() => clearDraft({ scope: "scope" }, "draft:channel"));
+  expect(screen.getByRole("alert")).toHaveTextContent(/changed elsewhere/);
+  h.fill("Edited here, still typing");
+  expect(viewRevision("scope", "draft:channel")).toBeNull();
+});
 
 it("compares before local edits and Send even if the storage event has not arrived", async () => {
   const h = mount();

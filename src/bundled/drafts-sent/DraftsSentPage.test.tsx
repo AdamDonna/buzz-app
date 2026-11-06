@@ -9,6 +9,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ComponentType } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { apply } from "./index";
@@ -261,6 +262,101 @@ it("lists drafts first and continues a thread draft at its root", async () => {
   expect(screen.getByText("No drafts match “missing”.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
   expect(screen.getByText("Finish launch reply")).toBeInTheDocument();
+});
+
+it("clears only the chosen draft from the keyboard, without opening it", async () => {
+  const user = userEvent.setup();
+  saved("draft:team", "Channel note");
+  saved(`draft:team:thread:${root}`, { text: "Thread reply" });
+  saved("draft:dm", "Lunch tomorrow?");
+  saved("draft:gone", "Orphaned note");
+  const h = harness();
+  const Page = h.page.component;
+  const Badge = h.page.badge;
+  const rendered = render(
+    <>
+      <Badge />
+      <Page />
+    </>,
+  );
+  const list = screen.getByRole("list", { name: "Drafts" });
+  expect(screen.getByLabelText("4 drafts")).toBeInTheDocument();
+  expect(screen.getByText("Recently shipped")).toBeInTheDocument();
+
+  const thread = within(list).getByRole("button", {
+    name: "Clear draft in #launch-room, thread: Thread reply",
+  });
+  act(() => thread.focus());
+  await user.keyboard("{Enter}");
+  expect(within(list).queryByText("Thread reply")).toBeNull();
+  expect(
+    localStorage.getItem(
+      `buzz-view.v1:${JSON.stringify([scope, `draft:team:thread:${root}`])}`,
+    ),
+  ).toBeNull();
+  expect(within(list).getByText("Channel note")).toBeInTheDocument();
+  expect(screen.getByLabelText("3 drafts")).toBeInTheDocument();
+  // Focus stays in the list, on the neighbouring draft's clear action.
+  expect(
+    within(list).getByRole("button", {
+      name: "Clear draft in #launch-room: Channel note",
+    }),
+  ).toHaveFocus();
+
+  // A draft whose conversation is gone can't be opened, but can be cleared.
+  expect(
+    within(list).getByRole("button", { name: /Continue draft in Unavailable/ }),
+  ).toBeDisabled();
+  await user.click(
+    within(list).getByRole("button", {
+      name: "Clear draft in Unavailable conversation: Orphaned note",
+    }),
+  );
+  expect(within(list).queryByText("Orphaned note")).toBeNull();
+  expect(screen.getByLabelText("2 drafts")).toBeInTheDocument();
+  expect(h.open).not.toHaveBeenCalled();
+  // Sent messages have nothing to clear.
+  expect(screen.getByText("Recently shipped")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: /^Clear draft/ })).toHaveLength(
+    2,
+  );
+
+  // The row itself still continues its draft.
+  await user.click(
+    within(list).getByRole("button", {
+      name: /Continue draft in #launch-room/,
+    }),
+  );
+  await waitFor(() =>
+    expect(h.open).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: "team" }),
+    ),
+  );
+
+  // Cleared drafts stay cleared after a reload.
+  rendered.unmount();
+  render(<h.page.component />);
+  const reloaded = screen.getByRole("list", { name: "Drafts" });
+  expect(within(reloaded).getAllByRole("listitem")).toHaveLength(2);
+  expect(within(reloaded).getByText("Channel note")).toBeInTheDocument();
+  expect(within(reloaded).getByText("Lunch tomorrow?")).toBeInTheDocument();
+});
+
+it("keeps a draft and says so when storage can't forget it", async () => {
+  saved("draft:team", "Stubborn note");
+  const h = harness();
+  const Page = h.page.component;
+  render(<Page />);
+  vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {});
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Clear draft in #launch-room: Stubborn note",
+    }),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "This draft could not be cleared. Try again.",
+  );
+  expect(screen.getByText("Stubborn note")).toBeInTheDocument();
 });
 
 it("sent groups by day, updates live, and opens the exact message", async () => {

@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { readDrafts } from "./drafts";
+import {
+  attachmentDraft,
+  attachmentDraftCount,
+} from "../../features/messages/attachment-draft";
+import { viewRevision } from "../../shared/view-state";
+import { clearDraft, readDrafts } from "./drafts";
 
 const viewer = "a".repeat(64);
 const root = "b".repeat(64);
@@ -146,4 +151,40 @@ it("remembers when drafts change, without storing their text", () => {
     readDrafts(session, NOW + 999).entries.map((e) => e.createdAt),
   ).toEqual([NOW + 120]);
   expect(localStorage.getItem(activity[0] ?? "")).not.toContain("draft:dm");
+});
+
+it("clears one draft's text and files, and keeps both when storage can't forget it", () => {
+  const files = {
+    scope,
+    attachments: { upload: vi.fn(() => new Promise(() => {})) },
+  };
+  const attach = (key: string) =>
+    attachmentDraft(
+      files as unknown as Parameters<typeof attachmentDraft>[0],
+      `${scope}:${key}`,
+      "team",
+    ).add([new File(["notes"], "notes.txt")]);
+  const count = (key: string) =>
+    attachmentDraftCount(
+      files as unknown as Parameters<typeof attachmentDraftCount>[0],
+      `${scope}:${key}`,
+    );
+  saved("draft:team", { text: "Caption" });
+  saved(`draft:team:thread:${root}`, { text: "Thread caption" });
+  attach("draft:team");
+  attach(`draft:team:thread:${root}`);
+
+  const remove = vi
+    .spyOn(Storage.prototype, "removeItem")
+    .mockImplementation(() => {});
+  expect(() => clearDraft(files, "draft:team")).toThrow();
+  expect(count("draft:team")).toBe(1);
+  expect(viewRevision(scope, "draft:team")).not.toBeNull();
+  remove.mockRestore();
+
+  clearDraft(files, "draft:team");
+  expect(count("draft:team")).toBe(0);
+  expect(viewRevision(scope, "draft:team")).toBeNull();
+  expect(count(`draft:team:thread:${root}`)).toBe(1);
+  expect(viewRevision(scope, `draft:team:thread:${root}`)).not.toBeNull();
 });

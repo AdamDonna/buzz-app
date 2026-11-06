@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   attachmentDraftCount,
+  clearAttachmentDraft,
   subscribeAttachmentDraftCounts,
 } from "../../features/messages/attachment-draft";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../../features/messages/mention-draft";
 import type { RelaySession } from "../../features/relay/session";
 import {
+  clearView,
   draftCoordinates,
   listDraftViews,
   subscribeView,
@@ -136,6 +138,17 @@ export function readDrafts(
     limited: listed.limited,
     unavailable: listed.unavailable > 0,
   };
+}
+
+/** Erases one saved draft and this window's files for it. A mounted composer
+ * reloads the empty draft, or keeps unsaved edits as a conflict. Throws when
+ * storage could not forget it, before discarding any files. */
+export function clearDraft(session: Session, key: string) {
+  clearView(session.scope, key);
+  clearAttachmentDraft(
+    session as Parameters<typeof clearAttachmentDraft>[0],
+    `${session.scope}:${key}`,
+  );
 }
 
 /** The session's drafts, re-read when the composer saves, clears or attaches. */

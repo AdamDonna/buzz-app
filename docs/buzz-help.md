@@ -461,7 +461,8 @@ revokes all of them, and a pairing unused for 30 days expires.
   were last ("You're last"); a channel post shows its reply count. Select a
   draft to continue it in its conversation, or a sent message to jump to it.
   Search matches the conversation name and what you wrote. It reads only this
-  device's saved drafts and never changes them.
+  device's saved drafts; a draft's trash button clears that draft and its
+  attached files without opening the conversation.
 - **Activity preview**: with a mouse or trackpad, rest the pointer on
   **Activity** in the app dock to see recent mentions, DMs, thread replies, and reactions
   without opening the Activity page. Clicking a conversation opens it directly;

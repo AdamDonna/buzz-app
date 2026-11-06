@@ -22,6 +22,7 @@ import {
   SendIcon,
   SparklesIcon,
   CheckIcon,
+  TrashIcon,
 } from "../../shared/design-system/icons/index";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
@@ -31,7 +32,10 @@ import { FullPageSurface } from "../../shared/design-system/ui/FullPageSurface";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
-import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
+import {
+  NavigationCard,
+  NavigationItem,
+} from "../../shared/design-system/ui/NavigationItem";
 import {
   PanelHeader,
   PanelHeaderLabel,
@@ -46,7 +50,7 @@ import {
   type Activity,
   type Shape,
 } from "./context";
-import { useDrafts } from "./drafts";
+import { clearDraft, useDrafts } from "./drafts";
 import {
   SENT_LIMIT,
   clockTime,
@@ -439,6 +443,23 @@ function ScopedPage({
     }
   }
 
+  /** Clears one draft and keeps keyboard focus in the list: the next row's clear
+   * action, else the previous one's, else search. */
+  function clear(entry: Entry, button: HTMLElement) {
+    setNotice(undefined);
+    const row = button.closest("li");
+    const neighbor = (
+      row?.nextElementSibling ?? row?.previousElementSibling
+    )?.querySelector<HTMLElement>("[data-clear-draft]");
+    try {
+      clearDraft(session, entry.id);
+    } catch {
+      setNotice("This draft could not be cleared. Try again.");
+      return;
+    }
+    (neighbor ?? searchInput.current)?.focus();
+  }
+
   function lead(place: Place) {
     if (place.kind === "dm" && place.person) {
       const profile = profiles.get(place.person);
@@ -503,75 +524,94 @@ function ScopedPage({
     ]
       .filter(Boolean)
       .join(". ");
+    const destination = (
+      <NavigationItem
+        multiline
+        aria-label={label}
+        disabled={!place.available}
+        title={
+          place.available
+            ? undefined
+            : "This conversation is not available right now"
+        }
+        onClick={() => void open(entry, draft)}
+        icon={<span className={styles.lead}>{lead(place)}</span>}
+        label={
+          <span className={styles.main}>
+            <span className={styles.head}>
+              <span className={`text-label-sm ${styles.name}`}>
+                {place.title}
+              </span>
+              {entry.threadRootId && (
+                <span className={`text-caption ${styles.chip}`}>
+                  <MessageReplyIcon size={12} />
+                  Thread
+                </span>
+              )}
+              {place.kind === "solo" && (
+                <span className={`text-caption ${styles.chip}`}>Solo</span>
+              )}
+            </span>
+            <span
+              className={`text-body-sm ${status?.tone === "new" ? "text-standard" : "text-subtle"} ${styles.preview}`}
+              data-placeholder={item.placeholder || undefined}
+            >
+              {draft && <span className={styles.draftMark}>Draft</span>}
+              {line}
+            </span>
+            <span className={styles.context}>
+              {stack(activity, place)}
+              {status && (
+                <span
+                  className={`text-caption ${styles.pill}`}
+                  data-tone={status.tone}
+                  title={status.detail}
+                >
+                  {status.icon === "reply" ? (
+                    <MessageReplyIcon size={12} />
+                  ) : status.icon === "check" ? (
+                    <CheckIcon size={12} />
+                  ) : (
+                    <span className={styles.dot} />
+                  )}
+                  {status.label}
+                </span>
+              )}
+            </span>
+          </span>
+        }
+        trailing={
+          time && entry.createdAt !== undefined ? (
+            <time
+              className={`text-caption ${styles.time}`}
+              dateTime={new Date(entry.createdAt * 1000).toISOString()}
+              title={fullTime(entry.createdAt)}
+            >
+              {time}
+            </time>
+          ) : undefined
+        }
+      />
+    );
     return (
       <li className={styles.row} key={entry.id}>
-        <NavigationItem
-          multiline
-          aria-label={label}
-          disabled={!place.available}
-          title={
-            place.available
-              ? undefined
-              : "This conversation is not available right now"
-          }
-          onClick={() => void open(entry, draft)}
-          icon={<span className={styles.lead}>{lead(place)}</span>}
-          label={
-            <span className={styles.main}>
-              <span className={styles.head}>
-                <span className={`text-label-sm ${styles.name}`}>
-                  {place.title}
-                </span>
-                {entry.threadRootId && (
-                  <span className={`text-caption ${styles.chip}`}>
-                    <MessageReplyIcon size={12} />
-                    Thread
-                  </span>
-                )}
-                {place.kind === "solo" && (
-                  <span className={`text-caption ${styles.chip}`}>Solo</span>
-                )}
-              </span>
-              <span
-                className={`text-body-sm ${status?.tone === "new" ? "text-standard" : "text-subtle"} ${styles.preview}`}
-                data-placeholder={item.placeholder || undefined}
-              >
-                {draft && <span className={styles.draftMark}>Draft</span>}
-                {line}
-              </span>
-              <span className={styles.context}>
-                {stack(activity, place)}
-                {status && (
-                  <span
-                    className={`text-caption ${styles.pill}`}
-                    data-tone={status.tone}
-                    title={status.detail}
-                  >
-                    {status.icon === "reply" ? (
-                      <MessageReplyIcon size={12} />
-                    ) : status.icon === "check" ? (
-                      <CheckIcon size={12} />
-                    ) : (
-                      <span className={styles.dot} />
-                    )}
-                    {status.label}
-                  </span>
-                )}
-              </span>
+        {draft ? (
+          <NavigationCard>
+            {destination}
+            <span className={styles.clear}>
+              <IconButton
+                variant="destructive-quiet"
+                icon={<TrashIcon size={16} aria-hidden="true" />}
+                aria-label={`Clear draft in ${where}: ${line}`}
+                title="Clear draft"
+                data-clear-draft=""
+                onClick={(event) => clear(entry, event.currentTarget)}
+              />
             </span>
-          }
-          trailing={
-            time && entry.createdAt !== undefined ? (
-              <time
-                className={`text-caption ${styles.time}`}
-                dateTime={new Date(entry.createdAt * 1000).toISOString()}
-                title={fullTime(entry.createdAt)}
-              >
-                {time}
-              </time>
-            ) : undefined
-          }
-        />
+          </NavigationCard>
+        ) : (
+          destination
+        )}
       </li>
     );
   }
