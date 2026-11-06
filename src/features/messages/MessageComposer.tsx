@@ -345,6 +345,8 @@ export type MessageComposerProps = {
     /** Told after each save whether the editor holds a draft it could not
      * save, which view state then misses. */
     unsaved?: ((held: boolean) => void) | undefined;
+    /** Hears each edit, whether or not saving it succeeded. */
+    onDraftChange?: ((draft: MentionDraft) => void) | undefined;
     /** `addressed`: the toolbar's agents, when they are held apart from the text. */
     submit: (
       draft: MentionDraft,
@@ -1074,6 +1076,7 @@ function Composer({
         submission.unsaved?.(
           unsavedDraft.current || unsavedPicks.current.size > 0,
         );
+        submission.onDraftChange?.(next);
       } else {
         dirty.current = true;
         if (!conflict && !accepted) persist(next);

@@ -209,6 +209,7 @@ it.each([false, true])(
       position: () => undefined,
       savePosition() {},
       forSession: () => navigation,
+      passThrough: () => () => {},
       complete: () => true,
       resolve: () => true,
     };

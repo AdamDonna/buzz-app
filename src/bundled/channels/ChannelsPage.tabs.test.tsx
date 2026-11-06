@@ -223,6 +223,7 @@ async function page(
         },
         resolve: () => true,
         complete: () => true,
+        passThrough: () => () => {},
       }
     : undefined;
   render(
@@ -384,6 +385,7 @@ function workspace(
           signal: new AbortController().signal,
           position: () => undefined,
           savePosition() {},
+          passThrough: () => () => {},
           forSession() {
             return this;
           },

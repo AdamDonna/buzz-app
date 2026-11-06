@@ -2607,6 +2607,7 @@ function linkVisits() {
       savePosition(key: string, value: JsonValue) {
         places.set(`${entryId}:${key}`, value);
       },
+      passThrough: () => () => {},
     }) satisfies PageNavigation;
   type InlineTarget = { messageId: string; signal: AbortSignal };
   const tree = (

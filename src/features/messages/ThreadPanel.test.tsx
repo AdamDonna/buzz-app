@@ -155,6 +155,7 @@ function ordinaryNavigation() {
     forSession: vi.fn<PageNavigation["forSession"]>(),
     position: vi.fn<PageNavigation["position"]>(),
     savePosition: vi.fn<PageNavigation["savePosition"]>(),
+    passThrough: () => () => {},
   } satisfies PageNavigation;
 }
 function messagesHarness(

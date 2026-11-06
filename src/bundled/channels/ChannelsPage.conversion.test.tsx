@@ -172,6 +172,7 @@ function fixture() {
     position: () => undefined,
     savePosition() {},
     forSession: () => navigation,
+    passThrough: () => () => {},
     complete: () => true,
     resolve: () => true,
   };

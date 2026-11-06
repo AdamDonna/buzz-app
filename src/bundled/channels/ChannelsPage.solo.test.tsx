@@ -27,6 +27,8 @@ import {
   soloDraftTarget,
 } from "../../features/channel-navigation/routes";
 import { linkedDraftKey } from "../../features/solo/linked-chat";
+import { attachmentDraft } from "../../features/messages/attachment-draft";
+import type { ComposerSession } from "../../features/messages/composer-session";
 import { readView, writeView } from "../../shared/view-state";
 import { splitPartition } from "../../features/relay/partition";
 import {
@@ -363,13 +365,14 @@ function fixture({
   };
   const abort = new AbortController();
   const complete = vi.fn(() => true);
-  const navigation: PageNavigation = {
+  let navigation: PageNavigation = {
     entryId: "visit",
     target: target?.(scope) ?? conversationTarget(scope, id),
     signal: abort.signal,
     position: () => undefined,
     savePosition() {},
     forSession: () => navigation,
+    passThrough: vi.fn<PageNavigation["passThrough"]>(() => () => {}),
     complete,
     resolve: () => true,
   };
@@ -421,10 +424,18 @@ function fixture({
       />
     </ChannelNavigationProvider>
   );
+  let rendered: ReturnType<typeof render> | undefined;
   return {
+    navigation,
     mount: () => render(page()),
+    mountWithToasts: () =>
+      (rendered = render(<ToastProvider>{page()}</ToastProvider>)),
+    /** The navigator moved this page's visit to `next`. */
+    show(next: OpenTarget) {
+      navigation = { ...navigation, target: next };
+      rendered?.rerender(<ToastProvider>{page()}</ToastProvider>);
+    },
     mountWithSidebar: () => render(page(true)),
-    mountWithToasts: () => render(<ToastProvider>{page()}</ToastProvider>),
     abort,
     archive,
     read,
@@ -751,6 +762,183 @@ it("addresses a Solo draft route's agent in the new chat without tagging the tex
   await user.keyboard("Hello{Enter}");
   await waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
   expect(f.send).toHaveBeenCalledWith(expect.any(String), "Hello", [agent]);
+});
+
+it("keeps a new chat out of Back history until something is written in it", async () => {
+  const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
+  f.mount();
+  const region = await screen.findByRole("region", { name: "New chat" });
+  const input = within(region).getByRole("textbox", {
+    name: "Message your agents",
+  });
+  const user = userEvent.setup();
+  await user.click(input);
+  const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
+  // The agent is addressed outside the text, and nothing is saved: nothing
+  // to come back to.
+  expect(input).not.toHaveTextContent("@");
+  expect(readView(f.scope, "solo:new-draft", null)).toBeNull();
+  expect(passes?.()).toBe(true);
+  await user.keyboard(" Plan the week");
+  expect(passes?.()).toBe(false);
+  await user.click(
+    within(region).getByRole("button", { name: "Send message" }),
+  );
+  await waitFor(() => expect(f.open).toHaveBeenCalledOnce());
+  // The sent draft is spent; the started chat takes its place.
+  expect(passes?.()).toBe(true);
+});
+
+it("gives a new chat that could not be started its draft's place in Back history", async () => {
+  const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
+  let refuse: (reason: unknown) => void = () => {};
+  vi.mocked(f.session.channelWrites.start).mockImplementationOnce(
+    (chat: string) => ({
+      create: f.session.channelWrites.create(chat),
+      ready: new Promise<void>((_resolve, reject) => {
+        refuse = reject;
+      }),
+    }),
+  );
+  f.mountWithToasts();
+  const region = await screen.findByRole("region", { name: "New chat" });
+  const user = userEvent.setup();
+  await user.click(
+    within(region).getByRole("textbox", { name: "Message your agents" }),
+  );
+  await user.keyboard(" Plan the week{Enter}");
+  await waitFor(() => expect(f.open).toHaveBeenCalledOnce());
+  const chat = vi.mocked(f.session.channelWrites.start).mock.lastCall?.[0];
+  expect(chat).toBeDefined();
+  f.show(conversationTarget(f.scope, chat ?? ""));
+  await act(async () => refuse(new ChatNotStarted("relay refused")));
+  // Replacing the never-made chat leaves Back at the draft's opener.
+  await waitFor(() =>
+    expect(f.open).toHaveBeenLastCalledWith(
+      soloDraftTarget(f.scope, { agent }),
+      { replace: true },
+    ),
+  );
+});
+
+it("keeps a written new chat in Back history when its draft cannot be saved", async () => {
+  const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
+  const draftStorageKey = `buzz-view.v1:${JSON.stringify([f.scope, "solo:new-draft"])}`;
+  const setItem = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+    this: Storage,
+    key: string,
+    value: string,
+  ) {
+    if (key === draftStorageKey)
+      throw new DOMException("Storage is full", "QuotaExceededError");
+    setItem.call(this, key, value);
+  });
+  try {
+    f.mount();
+    const region = await screen.findByRole("region", { name: "New chat" });
+    const input = within(region).getByRole("textbox", {
+      name: "Message your agents",
+    });
+    const user = userEvent.setup();
+    await user.click(input);
+    const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
+    expect(passes?.()).toBe(true);
+    await user.keyboard(" Unsaved but written");
+    expect(readView(f.scope, "solo:new-draft", null)).toBeNull();
+    expect(passes?.()).toBe(false);
+  } finally {
+    vi.mocked(Storage.prototype.setItem).mockRestore();
+  }
+});
+
+it("keeps a saved draft that only tags the default agent in Back history", async () => {
+  const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
+  // A tag the person typed, saved with its editor snapshot.
+  const typed = {
+    text: "@Scout ",
+    recipients: [{ pubkey: agent, name: "Scout", start: 0, end: 6 }],
+    document: {
+      version: 1,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "@Scout",
+                marks: [
+                  {
+                    type: "recipient",
+                    attrs: { pubkey: agent, name: "Scout" },
+                  },
+                ],
+              },
+              { type: "text", text: " " },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  writeView(f.scope, "solo:new-draft", typed);
+  f.mount();
+  const region = await screen.findByRole("region", { name: "New chat" });
+  await waitFor(() =>
+    expect(
+      within(region).getByRole("textbox", { name: "Message your agents" }),
+    ).toHaveTextContent("@Scout"),
+  );
+  const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
+  expect(passes?.()).toBe(false);
+  expect(readView(f.scope, "solo:new-draft", null)).toEqual(typed);
+});
+
+it("keeps a linked chat draft in Back history until its source is used", async () => {
+  const linked = "22222222-2222-4222-8222-222222222222";
+  const f = fixture({ target: (scope) => soloDraftTarget(scope, { linked }) });
+  const link = `buzz://message?channel=33333333-3333-4333-8333-333333333333&id=${"e".repeat(64)}`;
+  writeView(f.scope, linkedDraftKey(linked), {
+    channelId: "33333333-3333-4333-8333-333333333333",
+    link,
+  });
+  f.mount();
+  await waitFor(() =>
+    expect(screen.getByRole("textbox")).toHaveTextContent(link),
+  );
+  const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
+  expect(
+    readView(f.scope, `${linkedDraftKey(linked)}:new-draft`, null),
+  ).toBeNull();
+  expect(passes?.()).toBe(false);
+  // As a successful start leaves it: source consumed, draft absent.
+  writeView(f.scope, linkedDraftKey(linked), null);
+  expect(passes?.()).toBe(true);
+});
+
+it("counts a new chat's attached file as written", async () => {
+  const f = fixture({ target: soloDraftTarget });
+  f.mount();
+  const region = await screen.findByRole("region", { name: "New chat" });
+  const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
+  expect(passes?.()).toBe(true);
+  Object.assign(f.session, { attachments: { uploadForNewChat: vi.fn() } });
+  attachmentDraft(
+    f.session as unknown as ComposerSession,
+    `${f.scope}:solo:new-draft`,
+    "",
+    true,
+  ).addUploaded({
+    name: "notes.txt",
+    url: "https://media.invalid/notes.txt",
+    type: "text/plain",
+    size: 5,
+    sha256: "f".repeat(64),
+  });
+  expect(passes?.()).toBe(false);
+  expect(region).toBeVisible();
 });
 
 it("a new Solo chat finishing behind Settings stays put and retires its draft", async () => {
