@@ -72,6 +72,9 @@ the interface unless an available tool actually supports that action.
   unavailable until you sign in. Sign-in, sign-out and when the current
   sign-in ends also live under
   **Settings → Buzz → Identity → Organization sign-in**.
+- When a community requires organization sign-in, the sidebar or join dialog
+  explains why and offers **Sign in with** the organization’s name or server
+  address. Complete sign-in to reconnect; in the join dialog, choose **Continue**.
 - Signed in to more than one organization server? **Organization sign-in**
   lists each one you're signed in to, with the communities it's used by, and
   each **Sign out** ends only that server's sign-in. Your organization's own

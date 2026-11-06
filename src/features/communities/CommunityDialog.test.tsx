@@ -680,13 +680,22 @@ it("offers federated sign-in when joining refuses for it, then lets Continue run
     "wss://relay.example",
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  const signIn = await screen.findByRole("button", { name: "Sign in" });
+  expect(
+    await screen.findByText(
+      "This community requires builderlab.example sign-in.",
+    ),
+  ).toBeVisible();
+  const signIn = await screen.findByRole("button", {
+    name: "Sign in with builderlab.example",
+  });
   refuse = false;
   const requests = vi.mocked(fetch).mock.calls.length;
   await user.click(signIn);
   expect(h.service.signIn).toHaveBeenCalledOnce();
   await waitFor(() =>
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull(),
+    expect(
+      screen.queryByRole("button", { name: "Sign in with builderlab.example" }),
+    ).toBeNull(),
   );
   // Completing login replays nothing captured before it.
   expect(vi.mocked(fetch).mock.calls.length).toBe(requests);
@@ -748,7 +757,11 @@ it.each(["edit", "close"])(
     const field = screen.getByLabelText("Community URL");
     await user.type(field, "wss://old.example");
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Sign in with builderlab.example",
+      }),
+    );
     if (change === "close") view.unmount();
     else {
       await user.clear(field);

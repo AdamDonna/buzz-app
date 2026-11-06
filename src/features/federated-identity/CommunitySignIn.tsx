@@ -129,8 +129,10 @@ function Action({
   )
     return null;
   if (state.status === "signed-in") return null;
+  const server = serverName(state.authority);
   return (
     <>
+      <p className="text-body-sm">This community requires {server} sign-in.</p>
       <Button
         onClick={() => {
           setFailure("");
@@ -147,7 +149,9 @@ function Action({
           );
         }}
       >
-        {state.status === "signing-in" ? "Cancel sign-in" : "Sign in"}
+        {state.status === "signing-in"
+          ? "Cancel sign-in"
+          : `Sign in with ${server}`}
       </Button>
       {(failure || state.failure) && (
         <p role="alert" className="text-body-sm text-danger">

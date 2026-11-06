@@ -27,22 +27,32 @@ it.each(["storage-unavailable", "storage-denied"])(
     expect(h.service.signIn).not.toHaveBeenCalled();
   },
 );
-it("requires explicit sign-in before retrying protected community admission", async () => {
-  const h = federatedFixture();
-  const retry = vi.fn();
-  render(
-    <CommunitySignIn
-      identity={h.service}
-      error="Federated sign-in is required"
-      retry={retry}
-    />,
-  );
-  expect(h.service.signIn).not.toHaveBeenCalled();
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "Sign in" }));
-  expect(retry).toHaveBeenCalledOnce();
-});
+it.each([null, "Builderlab"])(
+  "names server %s and requires explicit sign-in before retrying admission",
+  async (organization) => {
+    const h = federatedFixture();
+    const authority = h.service.snapshot().authority;
+    if (!authority) throw new Error("Fixture authority missing");
+    h.publish({ authority: { ...authority, organization } });
+    const server = organization ?? "builderlab.example";
+    const retry = vi.fn();
+    render(
+      <CommunitySignIn
+        identity={h.service}
+        error="Federated sign-in is required"
+        retry={retry}
+      />,
+    );
+    expect(
+      screen.getByText(`This community requires ${server} sign-in.`),
+    ).toBeVisible();
+    expect(h.service.signIn).not.toHaveBeenCalled();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: `Sign in with ${server}` }));
+    expect(retry).toHaveBeenCalledOnce();
+  },
+);
 it.each(["binding-mismatch", "authorization-denied"])(
   "explains %s without a session to switch",
   (failure) => {
